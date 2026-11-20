@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { getVersion } from "@tauri-apps/api/app"
-import { getCurrentWindow } from "@tauri-apps/api/window"
 import { invoke } from "@tauri-apps/api/core"
-import { PhysicalSize } from "@tauri-apps/api/dpi"
 import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import packageJson from "../package.json"
@@ -92,7 +90,7 @@ export default function App() {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [dragTargetId, setDragTargetId] = useState<string | null>(null)
   const [dragPreviewIds, setDragPreviewIds] = useState<string[] | null>(null)
-  useEffect(() => { void (async () => { try { const id=await invoke<string>("get_device_id"); setDeviceId(id); const saved=await invoke<LicenseState|null>("get_license_state"); if(!saved?.status){setLicenseChecking(false);return} setLicenseState(saved); const validated=await invoke<LicenseState>("validate_license"); setLicenseState(validated); setLicensed(true); await invoke("expand_main_window"); const w=getCurrentWindow(); await w.show(); await w.setFocus() } catch (error) { setLicenseError(typeof error === "string" ? error : "Server Unavailable") } finally { setLicenseChecking(false) } })() }, [])
+  useEffect(() => { void (async () => { try { const id=await invoke<string>("get_device_id"); setDeviceId(id); const saved=await invoke<LicenseState|null>("get_license_state"); if(!saved?.status){setLicenseChecking(false);return} setLicenseState(saved); const validated=await invoke<LicenseState>("validate_license"); setLicenseState(validated); setLicensed(true); await invoke("expand_main_window") } catch (error) { setLicenseError(typeof error === "string" ? error : "Server Unavailable") } finally { setLicenseChecking(false) } })() }, [])
   const dragSourceRef = useRef<HTMLElement | null>(null)
   const dragPointerIdRef = useRef<number | null>(null)
   const dragSourceIdRef = useRef<string | null>(null)
@@ -302,8 +300,8 @@ export default function App() {
   const activateLicense = async () => {
     if (!key.trim() || !deviceId) { setLicenseError("Invalid License"); return }
     setLicenseChecking(true); setLicenseError("")
-    try { const activated=await invoke<LicenseState>("activate_license", { licenseKey: key }); setLicenseState(activated); const w = getCurrentWindow(); setKey(""); setLicensed(true)
-      await invoke("expand_main_window"); await w.show(); await w.setFocus(); return
+    try { const activated=await invoke<LicenseState>("activate_license", { licenseKey: key }); setLicenseState(activated); setKey(""); setLicensed(true)
+      await invoke("expand_main_window"); return
     } catch { setLicenseError("Server Unavailable") } finally { setLicenseChecking(false) }
   }
   const openLicensePurchase = () => {
@@ -1069,6 +1067,7 @@ function FlowShell({
   const containerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     let cancelled = false
+    setStatus("Loading Google Flow...")
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
     invoke("open_google_flow", {
@@ -1079,7 +1078,8 @@ function FlowShell({
       height: rect.height,
     })
       .then(() => {
-        if (!cancelled) setStatus("Google Flow ready")
+        if (cancelled) return
+        setStatus("Google Flow ready")
         containerRef.current?.dispatchEvent(new Event("stockstudio-webview-ready"))
       })
       .catch((error) => {
@@ -1107,7 +1107,7 @@ function FlowShell({
       observer.disconnect()
       container.removeEventListener("stockstudio-webview-ready", onReady)
     }
-  }, [navigatorOpen, fullView])
+  }, [account.id, navigatorOpen, fullView])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && fullView) onToggleFullView()
