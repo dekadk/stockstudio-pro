@@ -1,0 +1,15 @@
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+bootstrap*.txt
+bootstrap*.json
+local-admin-key*
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+*.secret
+*.key
+*.pem

@@ -206,6 +206,8 @@ pub fn run() {
             license_store::get_license_state,
             license_store::activate_license,
             license_store::validate_license,
+            license_store::deactivate_license,
+            license_store::list_license_devices,
             license_store::clear_license_state,
             account_store::load_accounts,
             account_store::save_accounts
@@ -217,8 +219,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_expanded_logical_bounds, validate_external_url, validate_external_url_with_allowlist,
-        ALLOWED_EXTERNAL_URLS,
+        compute_expanded_logical_bounds, validate_external_url,
+        validate_external_url_with_allowlist, ALLOWED_EXTERNAL_URLS,
     };
 
     #[test]
@@ -259,19 +261,23 @@ mod tests {
     #[test]
     fn accepts_only_exact_https_match_in_synthetic_allowlist() {
         let allowlist = &["https://stockstudio.example/buy"];
-        let parsed = validate_external_url_with_allowlist(
-            "https://stockstudio.example/buy",
-            allowlist,
-        )
-        .expect("exact allowlisted URL must be accepted");
+        let parsed =
+            validate_external_url_with_allowlist("https://stockstudio.example/buy", allowlist)
+                .expect("exact allowlisted URL must be accepted");
         assert_eq!(parsed.as_str(), "https://stockstudio.example/buy");
     }
 
     #[test]
     fn rejects_http_urls() {
-        let allowlist = &["https://stockstudio.example/buy", "http://stockstudio.example/buy"];
+        let allowlist = &[
+            "https://stockstudio.example/buy",
+            "http://stockstudio.example/buy",
+        ];
         assert!(validate_external_url("http://example.com").is_err());
-        assert!(validate_external_url_with_allowlist("http://stockstudio.example/buy", allowlist).is_err());
+        assert!(
+            validate_external_url_with_allowlist("http://stockstudio.example/buy", allowlist)
+                .is_err()
+        );
     }
 
     #[test]

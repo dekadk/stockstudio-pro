@@ -20,10 +20,80 @@ type Account = {
 const LICENSE_PURCHASE_URL = ""
 const TELEGRAM_CHANNEL_URL = ""
 const APP_VERSION = packageJson.version
-type LicenseState = { plan: string; status: string; expires_at: string | null; lifetime: boolean; last_validated_at: string; device_id: string }
-const licensePlanLabel = (plan: string) => ({ five_minutes: "5 Minutes", one_day: "1 Day", seven_days: "7 Days", thirty_days: "30 Days", one_year: "1 Year", lifetime: "Lifetime" }[plan] || plan)
-const licenseStatusLabel = (status: string) => status ? status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Unavailable"
-const licenseExpiryLabel = (state: LicenseState | null) => state?.lifetime ? "Lifetime" : state?.expires_at ? new Date(state.expires_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "—"
+type LicenseEntitlements = {
+  features: string[]
+  max_accounts: number | null
+  updates_until: string | null
+  max_app_version: string | null
+}
+type LicenseState = {
+  plan: string
+  status: string
+  expires_at: string | null
+  lifetime: boolean
+  last_validated_at: string
+  device_id: string
+  license_id?: string
+  activation_id?: string
+  key_prefix?: string
+  license_type?: string
+  billing_interval?: string
+  current_period_start?: string | null
+  current_period_end?: string | null
+  cancel_at_period_end?: boolean
+  device_limit?: number
+  devices_used?: number
+  offline_grace_until?: string
+  is_offline_grace?: boolean
+  entitlements?: LicenseEntitlements
+  lease_token?: string
+}
+type LicenseDeviceInfo = {
+  activation_id: string
+  device_id: string
+  device_name: string
+  platform: string
+  os_version?: string | null
+  app_version?: string
+  status: string
+  is_current_device: boolean
+  activated_at: string
+  last_validated_at: string
+}
+type LicenseDevicesResponse = {
+  license_id: string
+  key_prefix: string
+  license_type: string
+  billing_interval: string
+  status: string
+  device_limit: number
+  devices_used: number
+  devices: LicenseDeviceInfo[]
+}
+const licensePlanLabel = (plan: string) => ({ five_minutes: "5 Minutes", one_day: "1 Day", seven_days: "7 Days", thirty_days: "30 Days", pro_monthly: "30 Days", one_year: "1 Year", pro_yearly: "1 Year", lifetime: "Lifetime" }[plan] || plan)
+const licenseTypeLabel = (state: LicenseState | null) => {
+  if (!state) return "—"
+  if (state.license_type === "perpetual" || state.lifetime) return "Perpetual (Lifetime)"
+  if (state.license_type === "subscription") {
+    const interval = state.billing_interval === "yearly" ? "Yearly" : state.billing_interval === "monthly" ? "Monthly" : "Recurring"
+    return `Subscription (${interval})`
+  }
+  return "—"
+}
+const licenseStatusLabel = (status: string, isOfflineGrace?: boolean) => {
+  const base = status ? status.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Unavailable"
+  return isOfflineGrace ? `${base} (Offline Grace)` : base
+}
+const licenseExpiryLabel = (state: LicenseState | null) =>
+  state?.lifetime || state?.license_type === "perpetual"
+    ? "Never (Lifetime)"
+    : state?.expires_at
+    ? new Date(state.expires_at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
+    : "—"
+const licenseDevicesLabel = (state: LicenseState | null) =>
+  state && typeof state.device_limit === "number" && state.device_limit > 0
+    ? `${state.devices_used ?? 1} / ${state.device_limit} Devices`
+    : "—"
 const plans = [
   {
     name: "30 Days",
@@ -302,7 +372,18 @@ export default function App() {
     setLicenseChecking(true); setLicenseError("")
     try { const activated=await invoke<LicenseState>("activate_license", { licenseKey: key }); setLicenseState(activated); setKey(""); setLicensed(true)
       await invoke("expand_main_window"); return
-    } catch { setLicenseError("Server Unavailable") } finally { setLicenseChecking(false) }
+    } catch (error) { setLicenseError(typeof error === "string" && error.trim() ? error : "Server Unavailable") } finally { setLicenseChecking(false) }
+  }
+  const deactivateCurrentDevice = async () => {
+    setLicenseError("")
+    try {
+      await invoke("deactivate_license", { reason: "user_deactivated_from_app" })
+      setLicensed(false)
+      setLicenseState(null)
+      setView("accounts")
+    } catch (error) {
+      setLicenseError(typeof error === "string" && error.trim() ? error : "Unable to deactivate device")
+    }
   }
   const openLicensePurchase = () => {
     if (!LICENSE_PURCHASE_URL) return
@@ -452,7 +533,11 @@ export default function App() {
         {view === "settings" ? (
           <Settings profile={profile} onAvatarChange={updateProfileAvatar} />
         ) : view === "license" ? (
-          <LicensePage licenseState={licenseState} onBuy={() => void openLicensePurchase()} />
+          <LicensePage
+            licenseState={licenseState}
+            onBuy={() => void openLicensePurchase()}
+            onDeactivate={() => void deactivateCurrentDevice()}
+          />
         ) : view === "updates" ? (
           <UpdatesPage />
         ) : view === "info" ? (
@@ -614,8 +699,8 @@ function Sidebar({
         <div>
           <div className="side-license-info">
             <small>
-              <span>License {licenseState ? licenseStatusLabel(licenseState.status) : "Unavailable"}: <b>{licenseState ? licensePlanLabel(licenseState.plan) : "—"}</b></span>
-              <span>Expired: <b>{licenseExpiryLabel(licenseState)}</b></span>
+              <span>License {licenseState ? licenseStatusLabel(licenseState.status, licenseState.is_offline_grace) : "Unavailable"}: <b>{licenseState ? licensePlanLabel(licenseState.plan) : "—"}</b></span>
+              <span>Valid Until: <b>{licenseExpiryLabel(licenseState)}</b></span>
             </small>
           </div>
         </div>
@@ -635,7 +720,44 @@ function SidebarIcon({ name }: { name: "accounts" | "favorites" | "license" | "u
   }
   return <svg className="sidebar-icon" {...common}>{paths[name]}</svg>
 }
-function LicensePage({ licenseState, onBuy }: { licenseState: LicenseState | null; onBuy: () => void }) {
+function LicensePage({
+  licenseState,
+  onBuy,
+  onDeactivate,
+}: {
+  licenseState: LicenseState | null
+  onBuy: () => void
+  onDeactivate: () => void
+}) {
+  const [devicesInfo, setDevicesInfo] = useState<LicenseDevicesResponse | null>(null)
+  const [devicesError, setDevicesError] = useState("")
+  const [busyDeviceAction, setBusyDeviceAction] = useState(false)
+
+  const refreshDevices = async () => {
+    setDevicesError("")
+    try {
+      const result = await invoke<LicenseDevicesResponse>("list_license_devices")
+      setDevicesInfo(result)
+    } catch (error) {
+      setDevicesError(typeof error === "string" ? error : "Unable to load devices")
+    }
+  }
+
+  useEffect(() => {
+    if (licenseState?.activation_id) {
+      void refreshDevices()
+    }
+  }, [licenseState?.activation_id])
+
+  const handleDeactivateThisDevice = async () => {
+    setBusyDeviceAction(true)
+    try {
+      await onDeactivate()
+    } finally {
+      setBusyDeviceAction(false)
+    }
+  }
+
   return (
     <div className="feature-page">
       <div className="plan-grid">
@@ -660,14 +782,35 @@ function LicensePage({ licenseState, onBuy }: { licenseState: LicenseState | nul
             {licenseState ? licensePlanLabel(licenseState.plan) : "—"}
           </span>
           <span>
-            <b>Status</b>
-            {licenseState ? licenseStatusLabel(licenseState.status) : "Unavailable"}
+            <b>Type</b>
+            {licenseTypeLabel(licenseState)}
           </span>
           <span>
-            <b>Expires</b>
+            <b>Status</b>
+            {licenseState ? licenseStatusLabel(licenseState.status, licenseState.is_offline_grace) : "Unavailable"}
+          </span>
+          <span>
+            <b>Valid Until</b>
             {licenseExpiryLabel(licenseState)}
           </span>
+          <span>
+            <b>Active Devices</b>
+            {devicesInfo
+              ? `${devicesInfo.devices_used} / ${devicesInfo.device_limit} Devices`
+              : licenseDevicesLabel(licenseState)}
+          </span>
         </div>
+        {devicesError && <p className="dialog-error">{devicesError}</p>}
+        {licenseState?.activation_id && (
+          <div className="dialog-actions">
+            <button className="secondary" disabled={busyDeviceAction} onClick={() => void refreshDevices()}>
+              Refresh Devices
+            </button>
+            <button className="danger" disabled={busyDeviceAction} onClick={() => void handleDeactivateThisDevice()}>
+              {busyDeviceAction ? "Deactivating…" : "Deactivate This Device"}
+            </button>
+          </div>
+        )}
       </section>
     </div>
   )

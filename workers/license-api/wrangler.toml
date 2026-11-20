@@ -1,0 +1,51 @@
+# =============================================================================
+# StockStudio Pro License API (v0.2.0) — Wrangler Configuration
+# Platform: Cloudflare Workers + Cloudflare D1
+#
+# Deployment Policy:
+# - Local development uses local D1 (`wrangler d1 migrations apply DB --local` + `wrangler dev`).
+# - Development/staging deploys to `*.workers.dev` (`workers_dev = true`).
+# - Production custom domain is intentionally NOT hardcoded until an official
+#   StockStudio Pro domain is provisioned.
+# =============================================================================
+
+name = "stockstudio-pro-license-api"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "development"
+PRODUCT_ID = "com.stockstudiopro.desktop"
+ISSUER = "stockstudiopro-license-server"
+DEFAULT_DEVICE_LIMIT = "2"
+LEASE_TTL_DAYS = "7"
+MAX_CLOCK_SKEW_SECONDS = "300"
+LICENSE_KEY_PEPPER_VERSION = "1"
+LICENSE_SIGNING_KID = "sspro-ed25519-dev-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "stockstudio-pro-licenses-dev"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[env.staging]
+name = "stockstudio-pro-license-api-staging"
+workers_dev = true
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+PRODUCT_ID = "com.stockstudiopro.desktop"
+ISSUER = "stockstudiopro-license-server"
+DEFAULT_DEVICE_LIMIT = "2"
+LEASE_TTL_DAYS = "7"
+MAX_CLOCK_SKEW_SECONDS = "300"
+LICENSE_KEY_PEPPER_VERSION = "1"
+LICENSE_SIGNING_KID = "sspro-ed25519-staging-01"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "stockstudio-pro-licenses-staging"
+database_id = "REPLACE_WITH_STAGING_D1_DATABASE_ID"
+migrations_dir = "migrations"

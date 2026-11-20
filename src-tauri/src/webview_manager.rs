@@ -336,7 +336,9 @@ pub fn remove<R: Runtime>(app: &AppHandle<R>, account_id: String) -> Result<bool
     match std::fs::remove_dir_all(&profile) {
         Ok(()) => Ok(true),
         Err(error) => {
-            eprintln!("[stockstudio-webview] profile cleanup pending account={account_id}: {error}");
+            eprintln!(
+                "[stockstudio-webview] profile cleanup pending account={account_id}: {error}"
+            );
             Ok(false)
         }
     }

@@ -1,0 +1,24 @@
+{
+  "name": "stockstudio-pro-license-api",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "StockStudio Pro v0.2.0 License Management API (Cloudflare Workers + D1)",
+  "scripts": {
+    "dev:setup": "node scripts/generate-dev-vars.mjs",
+    "dev:bootstrap": "node scripts/bootstrap-local.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "@types/node": "^20.11.0",
+    "miniflare": "^3.20241106.1",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.5",
+    "wrangler": "^3.91.0"
+  }
+}

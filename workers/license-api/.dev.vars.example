@@ -1,0 +1,24 @@
+# =============================================================================
+# StockStudio Pro License API — Local Development Secrets Template
+#
+# NEVER commit real secrets or private keys to Git.
+# Run `npm run dev:setup` to generate an ephemeral local `.dev.vars` file
+# (gitignored) with freshly generated Ed25519 keys and HMAC peppers for local
+# `wrangler dev` testing.
+#
+# For Cloudflare staging/production, set these via:
+#   npx wrangler secret put LICENSE_KEY_PEPPER
+#   npx wrangler secret put ADMIN_TOKEN_PEPPER
+#   npx wrangler secret put IP_HASH_SALT
+#   npx wrangler secret put LICENSE_SIGNING_PRIVATE_KEY_JWK
+#   npx wrangler secret put LICENSE_SIGNING_PUBLIC_KEY_BASE64
+#   npx wrangler secret put BILLING_WEBHOOK_SECRETS_JSON
+# =============================================================================
+
+LICENSE_KEY_PEPPER="<GENERATE_WITH_npm_run_dev:setup_OR_32_BYTE_HEX>"
+ADMIN_TOKEN_PEPPER="<GENERATE_WITH_npm_run_dev:setup_OR_32_BYTE_HEX>"
+IP_HASH_SALT="<GENERATE_WITH_npm_run_dev:setup_OR_32_BYTE_HEX>"
+LICENSE_SIGNING_KID="sspro-ed25519-dev-01"
+LICENSE_SIGNING_PRIVATE_KEY_JWK="<GENERATE_WITH_npm_run_dev:setup_EPHEMERAL_ED25519_JWK_JSON>"
+LICENSE_SIGNING_PUBLIC_KEY_BASE64="<GENERATE_WITH_npm_run_dev:setup_32_BYTE_BASE64_PUBKEY>"
+BILLING_WEBHOOK_SECRETS_JSON="{\"mock_provider\":\"<GENERATE_WITH_npm_run_dev:setup>\"}"
