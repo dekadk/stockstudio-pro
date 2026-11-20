@@ -47,5 +47,5 @@ LICENSE_SIGNING_KID = "sspro-ed25519-staging-01"
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "stockstudio-pro-licenses-staging"
-database_id = "REPLACE_WITH_STAGING_D1_DATABASE_ID"
+database_id = "870f9578-82ab-4516-b45f-5300ed3f5e29"
 migrations_dir = "migrations"
