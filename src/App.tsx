@@ -7,6 +7,8 @@ import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import packageJson from "../package.json"
 import { loadAccounts, saveAccounts } from "./services/account-store"
+import brandLogoOrange from "./assets/branding/iconssoren.svg"
+import brandLogoWhite from "./assets/branding/iconssputih.svg"
 
 type Account = {
   id: string
@@ -17,7 +19,7 @@ type Account = {
   favorite: boolean
   order: number
 }
-const LICENSE_PURCHASE_URL = "https://tokotelegram.com/toko/flowpilot"
+const LICENSE_PURCHASE_URL = ""
 const TELEGRAM_CHANNEL_URL = ""
 const APP_VERSION = packageJson.version
 type LicenseState = { plan: string; status: string; expires_at: string | null; lifetime: boolean; last_validated_at: string; device_id: string }
@@ -29,48 +31,19 @@ const plans = [
     name: "30 Days",
     originalPrice: "Rp50,000",
     price: "Rp25,000",
-    description: "Flowpilot access for 30 days",
+    description: "StockStudio Pro access for 30 days",
   },
   {
     name: "1 Year",
     originalPrice: "Rp149.000",
     price: "Rp99.000",
-    description: "Flowpilot access for 1 year",
+    description: "StockStudio Pro access for 1 year",
   },
   {
     name: "Lifetime",
     originalPrice: "Rp249.000",
     price: "Rp149.000",
-    description: "Flowpilot access with no expiration",
-  },
-]
-const starter: Account[] = [
-  {
-    id: "main",
-    name: "Flow Main",
-    email: null,
-    avatarUrl: "/google-flow.png",
-    avatar: "YK",
-    favorite: true,
-    order: 0,
-  },
-  {
-    id: "client",
-    name: "Client A",
-    email: null,
-    avatarUrl: "/google-flow.png",
-    avatar: "CA",
-    favorite: false,
-    order: 1,
-  },
-  {
-    id: "backup",
-    name: "Backup",
-    email: null,
-    avatarUrl: "/google-flow.png",
-    avatar: "B",
-    favorite: false,
-    order: 2,
+    description: "StockStudio Pro access with no expiration",
   },
 ]
 
@@ -89,11 +62,11 @@ export default function App() {
   }>(() => {
     try {
       return JSON.parse(
-        localStorage.getItem("flowpilot-profile") ||
-          '{"name":"Flowpilot","avatar":null}'
+        localStorage.getItem("stockstudio-profile") ||
+          '{"name":"StockStudio Pro","avatar":null}'
       )
     } catch {
-      return { name: "Flowpilot", avatar: null }
+      return { name: "StockStudio Pro", avatar: null }
     }
   })
   const [query, setQuery] = useState("")
@@ -191,7 +164,7 @@ export default function App() {
   const updateProfileAvatar = (avatar: string) => {
     const next = { ...profile, avatar }
     setProfile(next)
-    localStorage.setItem("flowpilot-profile", JSON.stringify(next))
+    localStorage.setItem("stockstudio-profile", JSON.stringify(next))
   }
   useEffect(() => {
     if (!licensed || accountsLoaded) return
@@ -333,17 +306,19 @@ export default function App() {
       await invoke("expand_main_window"); await w.show(); await w.setFocus(); return
     } catch { setLicenseError("Server Unavailable") } finally { setLicenseChecking(false) }
   }
-  const openLicensePurchase = () =>
-    invoke("open_external_url", { url: LICENSE_PURCHASE_URL })
+  const openLicensePurchase = () => {
+    if (!LICENSE_PURCHASE_URL) return
+    return invoke("open_external_url", { url: LICENSE_PURCHASE_URL })
+  }
   if (licenseChecking && !licensed)
-    return <div className="gate"><div className="gate-card"><Brand /><h1>Checking your license</h1><p>Connecting securely to Flowpilot License Server…</p></div></div>
+    return <div className="gate"><div className="gate-card"><Brand /><h1>Checking your license</h1><p>Connecting securely to StockStudio Pro License Server…</p></div></div>
   if (!licensed)
     return (
       <div className="gate">
         <div className="gate-card">
           <Brand />
           <h1>Enter your license</h1>
-          <p>Activate Flowpilot with your license key.</p>
+          <p>Activate StockStudio Pro with your license key.</p>
           <input
             autoFocus
             value={key}
@@ -352,20 +327,26 @@ export default function App() {
             onKeyDown={(e) => e.key === "Enter" && activateLicense()}
           />
           <button className="primary wide" onClick={activateLicense}>
-            {licenseChecking ? "Activating…" : "Activate Flowpilot →"}
+            {licenseChecking ? "Activating…" : "Activate StockStudio Pro →"}
           </button>
           {licenseError && <p className="dialog-error">{licenseError}</p>}
           <div className="link">
             Don’t have a license?{" "}
-            <a
-              href={LICENSE_PURCHASE_URL}
-              onClick={(e) => {
-                e.preventDefault()
-                void openLicensePurchase()
-              }}
-            >
-              <u>Buy a license →</u>
-            </a>
+            {LICENSE_PURCHASE_URL ? (
+              <a
+                href={LICENSE_PURCHASE_URL}
+                onClick={(e) => {
+                  e.preventDefault()
+                  void openLicensePurchase()
+                }}
+              >
+                <u>Buy a license →</u>
+              </a>
+            ) : (
+              <span className="link-disabled" aria-disabled="true">
+                Buy a license →
+              </span>
+            )}
           </div>
           <small>
             🔒 Your Google account login is handled directly in Google Flow.
@@ -411,7 +392,7 @@ export default function App() {
         <header>
           <div>
             <div className="eyebrow">
-              FLOWPILOT /{" "}
+              STOCKSTUDIO PRO /{" "}
               {view === "settings"
                 ? "SETTINGS"
                 : view === "favorites"
@@ -428,18 +409,18 @@ export default function App() {
                 : view === "updates"
                 ? "Updates"
                 : view === "info"
-                ? "How to Use Flowpilot"
+                ? "How to Use StockStudio Pro"
                 : "Google Flow Accounts"}
             </h1>
             <p>
               {view === "settings"
-                ? "Keep Flowpilot personal, private, and ready to use."
+                ? "Keep StockStudio Pro personal, private, and ready to use."
                 : view === "favorites"
                 ? "Your favorite Google Flow accounts in one place."
                 : view === "license"
-                ? "Choose the Flowpilot license that fits your needs."
+                ? "Choose the StockStudio Pro license that fits your needs."
                 : view === "updates"
-                ? "Keep Flowpilot up to date with the latest version."
+                ? "Keep StockStudio Pro up to date with the latest version."
                 : view === "info"
                 ? "A quick guide to managing your Google Flow accounts."
                 : "Manage your Google Flow accounts in one place."}
@@ -512,7 +493,7 @@ export default function App() {
             <div className="dialog">
               <h2>Delete {dialog.name}?</h2>
               <p>
-                This removes the account card from Flowpilot. Your Google
+                This removes the account card from StockStudio Pro. Your Google
                 account is not affected.
               </p>
               <div className="dialog-actions">
@@ -566,8 +547,8 @@ export default function App() {
 function Brand() {
   return (
     <div className="brand">
-      <img className="brand-image" src="/foursquare.png" alt="Flowpilot logo" />
-      <span>FLOWPILOT</span>
+      <img className="brand-image" src={brandLogoOrange} alt="StockStudio Pro logo" />
+      <span>STOCKSTUDIO PRO</span>
     </div>
   )
 }
@@ -627,9 +608,9 @@ function Sidebar({
       <div className="side-bottom">
         <div className="avatar">
           {profile.avatar ? (
-            <img src={profile.avatar} alt="Flowpilot profile" />
+            <img src={profile.avatar} alt="StockStudio Pro profile" />
           ) : (
-            "YK"
+            <img className="brand-avatar-fallback" src={brandLogoWhite} alt="StockStudio Pro" />
           )}
         </div>
         <div>
@@ -666,7 +647,7 @@ function LicensePage({ licenseState, onBuy }: { licenseState: LicenseState | nul
             <s>{plan.originalPrice}</s>
             <strong>{plan.price}</strong>
             <p>{plan.description}.</p>
-            <button className="primary" onClick={onBuy}>
+            <button className="primary" disabled={!LICENSE_PURCHASE_URL} onClick={onBuy}>
               Buy License
             </button>
           </section>
@@ -801,7 +782,7 @@ function InfoPage() {
   const steps = [
     [
       "Enter Your License",
-      "Enter your Flowpilot license on the initial screen to activate the application.",
+      "Enter your StockStudio Pro license on the initial screen to activate the application.",
     ],
     [
       "Add an Account",
@@ -809,7 +790,7 @@ function InfoPage() {
     ],
     [
       "Sign In to Google Flow",
-      "Sign in directly through Google Flow. Flowpilot does not ask for or store your Google password.",
+      "Sign in directly through Google Flow. StockStudio Pro does not ask for or store your Google password.",
     ],
     [
       "Manage Your Accounts",
@@ -849,8 +830,8 @@ function InfoPage() {
             <h3>Google Login Stays in Google Flow</h3>
             <p>
               Your Google account login is handled directly inside Google Flow.
-              Flowpilot does not ask you to enter your Google password into
-              Flowpilot.
+              StockStudio Pro does not ask you to enter your Google password into
+              StockStudio Pro.
             </p>
           </div>
         </div>
@@ -859,7 +840,7 @@ function InfoPage() {
           <div>
             <h3>No Password Storage</h3>
             <p>
-              Flowpilot does not store your Google password or ask you to
+              StockStudio Pro does not store your Google password or ask you to
               provide it to the application.
             </p>
           </div>
@@ -869,7 +850,7 @@ function InfoPage() {
           <div>
             <h3>Local Account Management</h3>
             <p>
-              Flowpilot stores account-management metadata locally on your
+              StockStudio Pro stores account-management metadata locally on your
               device so you can organize your Google Flow accounts.
             </p>
           </div>
@@ -879,7 +860,7 @@ function InfoPage() {
           <div>
             <h3>No Unnecessary Account Data Collection</h3>
             <p>
-              Flowpilot is designed to manage account shortcuts without
+              StockStudio Pro is designed to manage account shortcuts without
               requiring unnecessary Google account information. Your Google
               account remains managed through Google Flow.
             </p>
@@ -889,7 +870,7 @@ function InfoPage() {
       <section className="info-card telegram-card">
         <h2>Need help or want the latest updates?</h2>
         <p>
-          Follow the Flowpilot Telegram channel for announcements, guides, and
+          Follow the StockStudio Pro Telegram channel for announcements, guides, and
           product updates.
         </p>
         <button className="secondary" disabled={!TELEGRAM_CHANNEL_URL}>
@@ -1005,9 +986,9 @@ function Settings({
       <section>
         <label className="setting-icon profile-avatar-input">
           {profile.avatar ? (
-            <img src={profile.avatar} alt="Flowpilot profile" />
+            <img src={profile.avatar} alt="StockStudio Pro profile" />
           ) : (
-            "YK"
+            <img className="brand-avatar-fallback" src={brandLogoWhite} alt="StockStudio Pro" />
           )}
           <input
             id="profile-avatar-input"
@@ -1038,7 +1019,7 @@ function Settings({
         </label>
         <div>
           <div className="eyebrow">PROFILE</div>
-          <h2>Your Flowpilot profile</h2>
+          <h2>Your StockStudio Pro profile</h2>
           <p>Local desktop profile used for your account manager.</p>
         </div>
       </section>
@@ -1047,7 +1028,7 @@ function Settings({
           <div className="eyebrow">PRIVACY & SECURITY</div>
           <h2>Your data stays local</h2>
           <p>
-            Flowpilot stores account metadata on this device. Google passwords
+            StockStudio Pro stores account metadata on this device. Google passwords
             and credentials are never captured.
           </p>
         </div>
@@ -1057,7 +1038,7 @@ function Settings({
         <div>
           <div className="eyebrow">ABOUT</div>
           <h2>
-            Flowpilot <span className="muted">{APP_VERSION}</span>
+            StockStudio Pro <span className="muted">{APP_VERSION}</span>
           </h2>
           <p>Google Flow desktop workspace and multi-account manager.</p>
         </div>
@@ -1099,7 +1080,7 @@ function FlowShell({
     })
       .then(() => {
         if (!cancelled) setStatus("Google Flow ready")
-        containerRef.current?.dispatchEvent(new Event("flowpilot-webview-ready"))
+        containerRef.current?.dispatchEvent(new Event("stockstudio-webview-ready"))
       })
       .catch((error) => {
         console.error("Google Flow WebView failed", error)
@@ -1118,13 +1099,13 @@ function FlowShell({
       void invoke("resize_google_flow", { accountId: account.id, x: rect.left, y: rect.top, width: rect.width, height: rect.height })
     }
     const onReady = () => syncBounds()
-    container.addEventListener("flowpilot-webview-ready", onReady)
+    container.addEventListener("stockstudio-webview-ready", onReady)
     const observer = new ResizeObserver(syncBounds)
     observer.observe(container)
     syncBounds()
     return () => {
       observer.disconnect()
-      container.removeEventListener("flowpilot-webview-ready", onReady)
+      container.removeEventListener("stockstudio-webview-ready", onReady)
     }
   }, [navigatorOpen, fullView])
   useEffect(() => {

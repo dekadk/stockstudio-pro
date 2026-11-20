@@ -1,10 +1,10 @@
 [package]
-name = "flowpilot"
-version = "1.2.0"
+name = "stockstudio-pro"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
-name = "flowpilot_lib"
+name = "stockstudio_pro_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

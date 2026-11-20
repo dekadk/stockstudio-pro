@@ -7,7 +7,7 @@ export type StoredAccount = {
   favorite: boolean
   order: number
 }
-const STORAGE_KEY = "flowpilot-accounts"
+const STORAGE_KEY = "stockstudio-accounts"
 function isAccount(value: unknown): value is StoredAccount {
   if (!value || typeof value !== "object") return false
   const a = value as Partial<StoredAccount>
@@ -40,7 +40,7 @@ export async function loadAccounts(): Promise<StoredAccount[]> {
     }
     return []
   } catch (error) {
-    console.error("Flowpilot account data could not be loaded", error)
+    console.error("StockStudio Pro account data could not be loaded", error)
     return []
   }
 }
@@ -50,7 +50,7 @@ export async function saveAccounts(accounts: StoredAccount[]) {
     await invoke("save_accounts", { accounts })
     localStorage.removeItem(STORAGE_KEY)
   } catch (error) {
-    console.error("Flowpilot account data could not be saved", error)
+    console.error("StockStudio Pro account data could not be saved", error)
   }
 }
 import { invoke } from "@tauri-apps/api/core"

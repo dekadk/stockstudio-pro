@@ -1,6 +1,6 @@
 {
-  "name": "flowpilot",
-  "version": "1.2.0",
+  "name": "stockstudio-pro",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "vite",

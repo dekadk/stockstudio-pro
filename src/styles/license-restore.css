@@ -8,3 +8,4 @@
 .gate .wide{margin-top:20px}
 .gate .link{font-size:16px;margin:26px auto 35px}
 .gate small{font-size:11px;line-height:1.55}
+.gate .link .link-disabled{color:#686b6e;cursor:default;opacity:.75}
