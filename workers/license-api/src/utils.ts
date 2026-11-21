@@ -9,14 +9,123 @@ import {
   LicenseEventType,
   LicenseRow,
   PlatformType,
+  ProductEntitlementId,
   RequestContext,
   SignedLeasePayload,
+  SUPPORTED_PRODUCT_ENTITLEMENTS,
 } from "./types";
 import { generatePrefixedId } from "./crypto";
 
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/i;
+const SUPPORTED_PRODUCT_SET = new Set<string>(SUPPORTED_PRODUCT_ENTITLEMENTS);
+const IPV4_OCTET_REGEX = /^(0|[1-9][0-9]{0,2})$/;
+const IPV6_GROUP_REGEX = /^[0-9a-f]{1,4}$/i;
+
+function parseIpv4Octets(raw: string): number[] | null {
+  const parts = raw.split(".");
+  if (parts.length !== 4) return null;
+  const octets: number[] = [];
+  for (const part of parts) {
+    if (!IPV4_OCTET_REGEX.test(part)) return null;
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    octets.push(n);
+  }
+  return octets;
+}
+
+/**
+ * Validates and canonicalizes an IPv4 or IPv6 address for deterministic comparison.
+ * - IPv4 -> canonical dotted-decimal ("203.0.113.10")
+ * - IPv6 -> canonical expanded 8-hextet lowercase ("2001:0db8:0000:0000:0000:0000:0000:0001")
+ * - Rejects malformed strings, ports, CIDR suffixes, and zone IDs (returns null).
+ */
+export function canonicalizeIpAddress(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 64 || /\s/.test(trimmed)) return null;
+
+  // IPv4 check
+  if (!trimmed.includes(":")) {
+    const octets = parseIpv4Octets(trimmed);
+    return octets ? octets.join(".") : null;
+  }
+
+  // IPv6 check (reject brackets, zone IDs, slashes)
+  if (trimmed.includes("[") || trimmed.includes("]") || trimmed.includes("%") || trimmed.includes("/")) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const doubleColonParts = lower.split("::");
+  if (doubleColonParts.length > 2) {
+    return null;
+  }
+
+  const parseGroups = (segment: string, allowEmbeddedIpv4: boolean): string[] | null => {
+    if (segment === "") return [];
+    const tokens = segment.split(":");
+    const groups: string[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      const isLast = i === tokens.length - 1;
+      if (isLast && allowEmbeddedIpv4 && token.includes(".")) {
+        const octets = parseIpv4Octets(token);
+        if (!octets) return null;
+        const hi = ((octets[0] << 8) | octets[1]).toString(16).padStart(4, "0");
+        const lo = ((octets[2] << 8) | octets[3]).toString(16).padStart(4, "0");
+        groups.push(hi, lo);
+      } else {
+        if (!IPV6_GROUP_REGEX.test(token)) return null;
+        groups.push(token.padStart(4, "0"));
+      }
+    }
+    return groups;
+  };
+
+  if (doubleColonParts.length === 1) {
+    const groups = parseGroups(doubleColonParts[0], true);
+    if (!groups || groups.length !== 8) return null;
+    return groups.join(":");
+  }
+
+  const left = parseGroups(doubleColonParts[0], false);
+  const right = parseGroups(doubleColonParts[1], true);
+  if (!left || !right) return null;
+  const missing = 8 - (left.length + right.length);
+  if (missing < 1) return null;
+
+  const zeros = new Array<string>(missing).fill("0000");
+  return [...left, ...zeros, ...right].join(":");
+}
+
+/**
+ * Resolves the trusted client IP according to environment:
+ * - production / staging: trusts `CF-Connecting-IP` EXCLUSIVELY (never `X-Forwarded-For`
+ *   and never substitutes `127.0.0.1`). Returns null if missing or malformed.
+ * - development: checks `CF-Connecting-IP`, then `X-Forwarded-For` first entry, then `127.0.0.1`.
+ */
+export function resolveClientIp(request: Request, env: Env): string | null {
+  const environment = (env.ENVIRONMENT ?? "development").toLowerCase();
+  const cfIp = request.headers.get("CF-Connecting-IP");
+
+  if (environment === "production" || environment === "staging") {
+    return canonicalizeIpAddress(cfIp);
+  }
+
+  if (cfIp !== null && cfIp.trim().length > 0) {
+    return canonicalizeIpAddress(cfIp);
+  }
+
+  const xffFirst = request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim();
+  if (xffFirst) {
+    return canonicalizeIpAddress(xffFirst);
+  }
+
+  return "127.0.0.1";
+}
 
 export const DEFAULT_ENTITLEMENTS: LicenseEntitlements = {
   features: [
@@ -230,23 +339,209 @@ export function validateDeviceInput(
   };
 }
 
+export function validateAndNormalizeProducts(
+  rawProducts: unknown
+): ProductEntitlementId[] {
+  if (!Array.isArray(rawProducts)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message:
+        "'entitlements.products' must be an array of supported product identifiers.",
+    });
+  }
+
+  const normalized: ProductEntitlementId[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rawProducts) {
+    if (typeof entry !== "string") {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message:
+          "Each entry in 'entitlements.products' must be a string product identifier.",
+      });
+    }
+    const candidate = entry.trim().toLowerCase();
+    if (!SUPPORTED_PRODUCT_SET.has(candidate)) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: `Unsupported product entitlement '${entry}'. Allowed products: ${SUPPORTED_PRODUCT_ENTITLEMENTS.join(", ")}.`,
+      });
+    }
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      normalized.push(candidate as ProductEntitlementId);
+    }
+  }
+
+  if (normalized.length === 0) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'entitlements.products' cannot be empty when specified.",
+    });
+  }
+
+  return normalized;
+}
+
+export function validateEntitlementsInput(
+  rawEntitlements: unknown,
+  baseEntitlements?: LicenseEntitlements
+): LicenseEntitlements {
+  const base = baseEntitlements ?? DEFAULT_ENTITLEMENTS;
+  if (rawEntitlements === undefined) {
+    return {
+      ...(base.products !== undefined ? { products: [...base.products] } : {}),
+      features: [...base.features],
+      max_accounts: base.max_accounts,
+      updates_until: base.updates_until,
+      max_app_version: base.max_app_version,
+    };
+  }
+
+  if (
+    !rawEntitlements ||
+    typeof rawEntitlements !== "object" ||
+    Array.isArray(rawEntitlements)
+  ) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'entitlements' must be a JSON object.",
+    });
+  }
+
+  const rawEnt = rawEntitlements as Record<string, unknown>;
+
+  let products: ProductEntitlementId[] | undefined =
+    base.products !== undefined ? [...base.products] : undefined;
+  if ("products" in rawEnt && rawEnt.products !== undefined) {
+    products = validateAndNormalizeProducts(rawEnt.products);
+  }
+
+  let features = [...base.features];
+  if ("features" in rawEnt && rawEnt.features !== undefined) {
+    if (!Array.isArray(rawEnt.features)) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "'entitlements.features' must be an array of strings.",
+      });
+    }
+    features = rawEnt.features.map((item) => {
+      if (typeof item !== "string" || item.trim().length === 0) {
+        throw new ApiError({
+          code: "INVALID_REQUEST",
+          status: 400,
+          message:
+            "Each entry in 'entitlements.features' must be a non-empty string.",
+        });
+      }
+      return item.trim();
+    });
+  }
+
+  let maxAccounts = base.max_accounts;
+  if ("max_accounts" in rawEnt && rawEnt.max_accounts !== undefined) {
+    if (rawEnt.max_accounts === null) {
+      maxAccounts = null;
+    } else if (
+      typeof rawEnt.max_accounts === "number" &&
+      Number.isInteger(rawEnt.max_accounts) &&
+      rawEnt.max_accounts >= 1
+    ) {
+      maxAccounts = rawEnt.max_accounts;
+    } else {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "'entitlements.max_accounts' must be a positive integer or null.",
+      });
+    }
+  }
+
+  let updatesUntil = base.updates_until;
+  if ("updates_until" in rawEnt && rawEnt.updates_until !== undefined) {
+    if (rawEnt.updates_until === null) {
+      updatesUntil = null;
+    } else if (typeof rawEnt.updates_until === "string") {
+      updatesUntil = rawEnt.updates_until.trim() || null;
+    } else {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "'entitlements.updates_until' must be a string or null.",
+      });
+    }
+  }
+
+  let maxAppVersion = base.max_app_version;
+  if ("max_app_version" in rawEnt && rawEnt.max_app_version !== undefined) {
+    if (rawEnt.max_app_version === null) {
+      maxAppVersion = null;
+    } else if (typeof rawEnt.max_app_version === "string") {
+      maxAppVersion = rawEnt.max_app_version.trim() || null;
+    } else {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "'entitlements.max_app_version' must be a string or null.",
+      });
+    }
+  }
+
+  return {
+    ...(products !== undefined ? { products } : {}),
+    features,
+    max_accounts: maxAccounts,
+    updates_until: updatesUntil,
+    max_app_version: maxAppVersion,
+  };
+}
+
 export function parseEntitlements(
   license: Pick<LicenseRow, "entitlements_json" | "updates_until" | "max_app_version">
 ): LicenseEntitlements {
   try {
-    const parsed = JSON.parse(license.entitlements_json) as Partial<LicenseEntitlements>;
+    const parsed = JSON.parse(license.entitlements_json) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Entitlements JSON must be an object");
+    }
+    const obj = parsed as Partial<LicenseEntitlements> & { products?: unknown };
+
+    let products: ProductEntitlementId[] | undefined;
+    if (Array.isArray(obj.products)) {
+      const seen = new Set<string>();
+      const validProducts: ProductEntitlementId[] = [];
+      for (const item of obj.products) {
+        if (typeof item === "string") {
+          const normalized = item.trim().toLowerCase();
+          if (SUPPORTED_PRODUCT_SET.has(normalized) && !seen.has(normalized)) {
+            seen.add(normalized);
+            validProducts.push(normalized as ProductEntitlementId);
+          }
+        }
+      }
+      products = validProducts;
+    }
+
     return {
-      features: Array.isArray(parsed.features)
-        ? parsed.features.map(String)
+      ...(products !== undefined ? { products } : {}),
+      features: Array.isArray(obj.features)
+        ? obj.features.map(String)
         : DEFAULT_ENTITLEMENTS.features,
       max_accounts:
-        typeof parsed.max_accounts === "number" ? parsed.max_accounts : null,
+        typeof obj.max_accounts === "number" ? obj.max_accounts : null,
       updates_until:
         license.updates_until ??
-        (typeof parsed.updates_until === "string" ? parsed.updates_until : null),
+        (typeof obj.updates_until === "string" ? obj.updates_until : null),
       max_app_version:
         license.max_app_version ??
-        (typeof parsed.max_app_version === "string" ? parsed.max_app_version : null),
+        (typeof obj.max_app_version === "string" ? obj.max_app_version : null),
     };
   } catch {
     return {

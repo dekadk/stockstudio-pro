@@ -37,12 +37,14 @@ import {
   RequestContext,
 } from "./types";
 import {
-  DEFAULT_ENTITLEMENTS,
+  canonicalizeIpAddress,
   formatLicenseSummary,
   getDefaultDeviceLimit,
   getExpectedProductId,
+  parseEntitlements,
   parseJsonBody,
   prepareLicenseEventStatement,
+  validateEntitlementsInput,
 } from "./utils";
 
 /**
@@ -113,6 +115,54 @@ export async function authenticateAdmin(
       status: 403,
       message: `Admin role '${adminKey.role}' is not permitted to perform this operation.`,
     });
+  }
+
+  // Enforce optional IP allowlist when configured (null or empty array remains unrestricted)
+  if (
+    adminKey.allowed_ips_json !== null &&
+    adminKey.allowed_ips_json.trim().length > 0
+  ) {
+    let parsedAllowedIps: unknown;
+    try {
+      parsedAllowedIps = JSON.parse(adminKey.allowed_ips_json);
+    } catch {
+      throw new ApiError({
+        code: "FORBIDDEN_ROLE",
+        status: 403,
+        message: "Admin API key IP allowlist configuration is invalid.",
+      });
+    }
+
+    if (!Array.isArray(parsedAllowedIps)) {
+      throw new ApiError({
+        code: "FORBIDDEN_ROLE",
+        status: 403,
+        message: "Admin API key IP allowlist configuration is invalid.",
+      });
+    }
+
+    const canonicalAllowlist: string[] = [];
+    for (const entry of parsedAllowedIps) {
+      const canonical = canonicalizeIpAddress(entry);
+      if (!canonical) {
+        throw new ApiError({
+          code: "FORBIDDEN_ROLE",
+          status: 403,
+          message: "Admin API key IP allowlist contains an invalid IP address.",
+        });
+      }
+      canonicalAllowlist.push(canonical);
+    }
+
+    if (canonicalAllowlist.length > 0) {
+      if (!ctx.clientIp || !canonicalAllowlist.includes(ctx.clientIp)) {
+        throw new ApiError({
+          code: "FORBIDDEN_ROLE",
+          status: 403,
+          message: "Admin API request IP is not in the configured allowlist.",
+        });
+      }
+    }
   }
 
   await env.DB.prepare(
@@ -298,25 +348,9 @@ export async function handleAdminCreateLicense(
     });
   }
 
-  let entitlements: LicenseEntitlements = { ...DEFAULT_ENTITLEMENTS };
-  if (
-    body.entitlements &&
-    typeof body.entitlements === "object" &&
-    !Array.isArray(body.entitlements)
-  ) {
-    const rawEnt = body.entitlements as Partial<LicenseEntitlements>;
-    entitlements = {
-      features: Array.isArray(rawEnt.features)
-        ? rawEnt.features.map(String)
-        : DEFAULT_ENTITLEMENTS.features,
-      max_accounts:
-        typeof rawEnt.max_accounts === "number" ? rawEnt.max_accounts : null,
-      updates_until:
-        typeof rawEnt.updates_until === "string" ? rawEnt.updates_until : null,
-      max_app_version:
-        typeof rawEnt.max_app_version === "string" ? rawEnt.max_app_version : null,
-    };
-  }
+  const entitlements: LicenseEntitlements = validateEntitlementsInput(
+    body.entitlements
+  );
 
   const licenseId = generatePrefixedId("lic", ctx.now.getTime());
   const { licenseKey, keyPrefix } = generateLicenseKey();
@@ -474,6 +508,7 @@ export async function handleAdminCreateLicense(
         current_period_end: currentPeriodEnd,
         device_limit: deviceLimit,
         devices_used: 0,
+        entitlements,
         customer_email: customerEmail,
         created_at: ctx.nowIso,
       },
@@ -654,12 +689,16 @@ export async function handleAdminUpdateLicense(
       : license.notes;
 
   let newEntitlementsJson = license.entitlements_json;
-  if (
-    body.entitlements &&
-    typeof body.entitlements === "object" &&
-    !Array.isArray(body.entitlements)
-  ) {
-    newEntitlementsJson = JSON.stringify(body.entitlements);
+  let newUpdatesUntil = license.updates_until;
+  let newMaxAppVersion = license.max_app_version;
+  if (body.entitlements !== undefined) {
+    const validatedEntitlements = validateEntitlementsInput(
+      body.entitlements,
+      parseEntitlements(license)
+    );
+    newEntitlementsJson = JSON.stringify(validatedEntitlements);
+    newUpdatesUntil = validatedEntitlements.updates_until;
+    newMaxAppVersion = validatedEntitlements.max_app_version;
   }
 
   await env.DB.batch([
@@ -670,7 +709,9 @@ export async function handleAdminUpdateLicense(
            customer_name = ?4,
            notes = ?5,
            entitlements_json = ?6,
-           updated_at = ?7
+           updates_until = ?7,
+           max_app_version = ?8,
+           updated_at = ?9
        WHERE id = ?1`
     ).bind(
       licenseId,
@@ -679,6 +720,8 @@ export async function handleAdminUpdateLicense(
       newCustomerName,
       newNotes,
       newEntitlementsJson,
+      newUpdatesUntil,
+      newMaxAppVersion,
       ctx.nowIso
     ),
     prepareLicenseEventStatement(env.DB, {

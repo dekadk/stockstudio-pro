@@ -49,3 +49,36 @@ binding = "DB"
 database_name = "stockstudio-pro-licenses-staging"
 database_id = "870f9578-82ab-4516-b45f-5300ed3f5e29"
 migrations_dir = "migrations"
+
+# -----------------------------------------------------------------------------
+# Production Environment (Prepared in G-G2.1 — Provisioned in G-G2.2)
+#
+# IMPORTANT:
+# - Never copy the staging database_id into production.
+# - Replace `REPLACE_WITH_PRODUCTION_D1_DATABASE_ID` only after creating the
+#   production D1 database in Cloudflare during G-G2.2.
+# - Configure a production custom HTTPS domain route before deploying.
+# - Required production secrets (via `wrangler secret put <NAME> --env production`):
+#     LICENSE_KEY_PEPPER, ADMIN_TOKEN_PEPPER, IP_HASH_SALT,
+#     LICENSE_SIGNING_PRIVATE_KEY_JWK, LICENSE_SIGNING_PUBLIC_KEY_BASE64,
+#     (optional) BILLING_WEBHOOK_SECRETS_JSON
+# -----------------------------------------------------------------------------
+[env.production]
+name = "stockstudio-pro-license-api-prod"
+workers_dev = true
+
+[env.production.vars]
+ENVIRONMENT = "production"
+PRODUCT_ID = "com.stockstudiopro.desktop"
+ISSUER = "stockstudiopro-license-server"
+DEFAULT_DEVICE_LIMIT = "2"
+LEASE_TTL_DAYS = "7"
+MAX_CLOCK_SKEW_SECONDS = "300"
+LICENSE_KEY_PEPPER_VERSION = "1"
+LICENSE_SIGNING_KID = "sspro-ed25519-prod-01"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "stockstudio-pro-licenses-prod"
+database_id = "e2356bb7-53dc-4412-b7f4-2c255115d6bd"
+migrations_dir = "migrations"

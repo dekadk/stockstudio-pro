@@ -18,11 +18,17 @@ export interface Env {
   // Server-side secrets (from Cloudflare Secrets / .dev.vars)
   LICENSE_KEY_PEPPER: string;
   ADMIN_TOKEN_PEPPER: string;
-  IP_HASH_SALT?: string;
+  IP_HASH_SALT: string;
   LICENSE_SIGNING_PRIVATE_KEY_JWK: string;
   LICENSE_SIGNING_PUBLIC_KEY_BASE64?: string;
   BILLING_WEBHOOK_SECRETS_JSON?: string;
 }
+
+export type ProductEntitlementId = "desktop" | "vectorizer_extension";
+export const SUPPORTED_PRODUCT_ENTITLEMENTS: readonly ProductEntitlementId[] = [
+  "desktop",
+  "vectorizer_extension",
+] as const;
 
 export type LicenseType = "perpetual" | "subscription";
 export type BillingInterval = "lifetime" | "monthly" | "yearly";
@@ -63,6 +69,7 @@ export type LicenseEventType =
   | "license.updated";
 
 export interface LicenseEntitlements {
+  products?: ProductEntitlementId[];
   features: string[];
   max_accounts: number | null;
   updates_until: string | null;
@@ -231,6 +238,7 @@ export interface RequestContext {
   requestId: string;
   now: Date;
   nowIso: string;
+  clientIp: string | null;
   ipHash: string;
   userAgent: string;
 }

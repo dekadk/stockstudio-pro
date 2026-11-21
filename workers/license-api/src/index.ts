@@ -22,7 +22,7 @@ import {
 import { generatePrefixedId, hashClientIp } from "./crypto";
 import { ApiError, errorResponse, jsonResponse } from "./errors";
 import { Env, RequestContext } from "./types";
-import { getExpectedProductId, getSigningKid } from "./utils";
+import { getExpectedProductId, getSigningKid, resolveClientIp } from "./utils";
 
 function enforceTlsInProduction(request: Request, env: Env): void {
   const environment = (env.ENVIRONMENT ?? "development").toLowerCase();
@@ -49,10 +49,7 @@ export async function handleRequest(
   const now = nowOverride ?? new Date();
   const nowIso = now.toISOString().replace(/\.\d{3}Z$/, "Z");
   const requestId = generatePrefixedId("req", now.getTime());
-  const rawIp =
-    request.headers.get("CF-Connecting-IP") ??
-    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ??
-    "127.0.0.1";
+  const clientIp = resolveClientIp(request, env);
   const userAgent = (request.headers.get("User-Agent") ?? "unknown").slice(
     0,
     256
@@ -61,11 +58,16 @@ export async function handleRequest(
   try {
     enforceTlsInProduction(request, env);
 
-    const ipHash = await hashClientIp(rawIp, env.IP_HASH_SALT, nowIso);
+    const ipHash = await hashClientIp(
+      clientIp ?? "unknown-ip",
+      env.IP_HASH_SALT,
+      nowIso
+    );
     const ctx: RequestContext = {
       requestId,
       now,
       nowIso,
+      clientIp,
       ipHash,
       userAgent,
     };

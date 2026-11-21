@@ -2,7 +2,7 @@
 
 - **Produk:** StockStudio Pro (`com.stockstudiopro.desktop`)
 - **Versi Target:** `v0.2.0`
-- **Prasyarat Terpenuhi:** Fase `C` (Rebranding & Security Hardening), Fase `D` (License Architecture, Worker API, & Rust Client), dan Fase `E` (Cloudflare Staging Deployment & Live E2E Verification — [`v0.2.0-E-E-staging-final-assessment.md`](file:///e:/2.%20Microstock/TOOL/flowpilot-main/flowpilot-main/docs/license/v0.2.0-E-E-staging-final-assessment.md)).
+- **Prasyarat Terpenuhi:** Fase `C` (Rebranding & Security Hardening), Fase `D` (License Architecture, Worker API, & Rust Client), dan Fase `E` (Cloudflare Staging Deployment & Live E2E Verification â€” [`v0.2.0-E-E-staging-final-assessment.md`](docs/license/v0.2.0-E-E-staging-final-assessment.md)).
 - **Status Dokumen:** Rencana Eksekusi Production Preparation *(belum ada resource production yang dibuat atau dideploy)*.
 
 ---
@@ -24,7 +24,7 @@ flowchart LR
    - Daftarkan domain resmi StockStudio Pro di Cloudflare DNS (mis. `license.<domain-resmi>`).
    - **Kritis (Temuan `E-C`):** Production **wajib** memakai custom domain (bukan `*.workers.dev`) agar bebas dari pemblokiran DNS ISP Indonesia (`blockpage.xlaxiata.id` dkk.).
 2. **Pembuatan Database D1 Production Terpisah:**
-   - Buat database baru `stockstudio-pro-licenses-prod` (`npx wrangler d1 create stockstudio-pro-licenses-prod`) — sepenuhnya terpisah dari staging (`870f9578-...`) dan lokal.
+   - Buat database baru `stockstudio-pro-licenses-prod` (`npx wrangler d1 create stockstudio-pro-licenses-prod`) â€” sepenuhnya terpisah dari staging (`870f9578-...`) dan lokal.
    - Tambahkan blok `[env.production]` pada `workers/license-api/wrangler.toml` dengan `name = "stockstudio-pro-license-api-prod"`, `workers_dev = false`, `routes = [{ pattern = "license.<domain-resmi>", custom_domain = true }]`, `ENVIRONMENT = "production"`, dan `LICENSE_SIGNING_KID = "sspro-ed25519-prod-01"`.
 3. **Migrasi D1 Production:**
    - Terapkan `migrations/0001_initial_license_schema.sql` ke D1 production (`npx wrangler d1 migrations apply DB --env production --remote`) dan verifikasi 9 tabel bersih.
@@ -53,7 +53,7 @@ flowchart LR
    - Petakan payload provider terpilih ke `CanonicalBillingEvent` pada `POST /v1/billing/webhooks/:provider` (`payment.succeeded`, `subscription.renewed`, `payment.failed`, `subscription.canceled`, `payment.refunded`, `payment.chargeback`).
    - Pasang secret verifikasi webhook pada `BILLING_WEBHOOK_SECRETS_JSON` (`--env production`).
 3. **Pengujian Sandbox Payment Gateway:**
-   - Uji *end-to-end* siklus `subscription` (`monthly` & `yearly`): pembelian baru → penerbitan lisensi otomatis → perpanjangan idempoten → gagal bayar (`past_due`) → refund (`revoked`).
+   - Uji *end-to-end* siklus `subscription` (`monthly` & `yearly`): pembelian baru â†’ penerbitan lisensi otomatis â†’ perpanjangan idempoten â†’ gagal bayar (`past_due`) â†’ refund (`revoked`).
 4. **Pengaktifan URL Pembelian di Desktop (`src/App.tsx` & `src-tauri/src/lib.rs`):**
    - Isi `LICENSE_PURCHASE_URL` (dan `TELEGRAM_CHANNEL_URL` jika tersedia) dengan URL HTTPS resmi StockStudio Pro dan daftarkan URL eksak tersebut pada `ALLOWED_EXTERNAL_URLS` di `src-tauri/src/lib.rs`.
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ### Tahap P4: Production Desktop Configuration, Updater, & Release Signing
 1. **Konfigurasi Endpoint & Public Key Verifikasi Desktop (`src-tauri/src/license_store.rs`):**
-   - Sematkan public key Ed25519 production (`sspro-ed25519-prod-01`, **public key 32-byte saja — bukan private key**) pada `EMBEDDED_VERIFYING_KEYS`.
+   - Sematkan public key Ed25519 production (`sspro-ed25519-prod-01`, **public key 32-byte saja â€” bukan private key**) pada `EMBEDDED_VERIFYING_KEYS`.
    - Atur compile-time `STOCKSTUDIO_LICENSE_API_URL=https://license.<domain-resmi>` pada pipeline build release (`.github/workflows/release.yml`).
 2. **Penggantian Infrastruktur Tauri Updater (`src-tauri/tauri.conf.json`):**
    - Buat pasangan kunci Minisign baru milik StockStudio Pro (`tauri signer generate`) untuk menggantikan kunci legacy Flowpilot (`key ID 9883364C90076B4B`).
@@ -77,7 +77,7 @@ flowchart LR
    - Aktifkan Cloudflare Workers Logs / Logpush & alert untuk lonjakan `5xx` atau `429 RATE_LIMITED`.
    - Jadwalkan backup berkala Cloudflare D1 (`wrangler d1 backup` / Time Travel restore verification) dan dokumentasikan runbook rotasi `LICENSE_SIGNING_KID` serta pemulihan insiden.
 2. **Pengujian Final Pra-Rilis (Menutup Sisa Batasan `E-E`):**
-   - Uji live *device limit* (`2/2` → `409 DEVICE_LIMIT_REACHED`) menggunakan 2–3 PC Windows nyata.
+   - Uji live *device limit* (`2/2` â†’ `409 DEVICE_LIMIT_REACHED`) menggunakan 2â€“3 PC Windows nyata.
    - Uji live *runtime C-B-B* pasca-aktivasi: HiDPI `125%`/`150%`, CSP DevTools zero-violation, rendering font `Plus Jakarta Sans` offline, upload avatar `data:`, drag-and-drop `DragPreview`, dan Google Flow WebView Sign-In (untuk memverifikasi apakah hostname OAuth Google tambahan perlu dimasukkan ke `ALLOWED_NAVIGATION_HOSTS` berdasarkan bukti debug log).
    - Uji live *offline grace* dan *clock rollback* pada binary release Windows (`stockstudio-pro.exe`).
 3. **Final Go-Live Checklist:**

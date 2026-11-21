@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vectorize.ai Download</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="header-brand">
+        <div class="brand-icon">V</div>
+        <div class="brand-text">
+          <h1>Vectorize.ai Download</h1>
+          <span class="brand-subtitle">Free Vector Exporter <span class="version-badge">v1.0</span></span>
+        </div>
+      </div>
+      <a href="https://vectorizer.ai" target="_blank" class="header-link" title="Open Vectorizer.ai in new tab">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </a>
+    </header>
+
+    <!-- StockStudio Pro Unified License Banner -->
+    <div id="license-card" class="license-card license-checking">
+      <div class="license-row">
+        <div class="license-indicator" id="license-indicator"></div>
+        <div class="license-info">
+          <div id="license-title" class="license-title">Checking StockStudio Pro license…</div>
+          <div id="license-desc" class="license-desc">Verifying device authorization via StockStudio Pro Desktop</div>
+        </div>
+        <button id="btn-recheck-license" class="license-refresh-btn" title="Re-check StockStudio Pro license">↻</button>
+      </div>
+    </div>
+
+    <!-- Locked License Panel (shown when unauthorized) -->
+    <div id="license-locked-panel" class="guide-content hidden">
+      <div class="guide-step">
+        <div class="step-num">1</div>
+        <div class="step-text">Ensure <strong>StockStudio Pro Desktop</strong> is installed on this computer.</div>
+      </div>
+      <div class="guide-step">
+        <div class="step-num">2</div>
+        <div class="step-text">Activate your StockStudio Pro License Key inside the Desktop app (no key entry is required in Chrome).</div>
+      </div>
+      <div class="guide-step">
+        <div class="step-num">3</div>
+        <div class="step-text">Click <strong>Re-check License</strong> below to unlock this extension.</div>
+      </div>
+      <button id="btn-retry-license" class="btn btn-primary" type="button">Re-check License</button>
+    </div>
+
+    <!-- Status Banner -->
+    <div id="status-card" class="status-card status-waiting hidden">
+      <div class="status-indicator"></div>
+      <div class="status-info">
+        <div id="status-title" class="status-title">Waiting for image...</div>
+        <div id="status-desc" class="status-desc">Upload and process an image on Vectorizer.ai</div>
+      </div>
+    </div>
+
+    <!-- Active Vector Section (shown when data is available) -->
+    <div id="vector-content" class="vector-content hidden">
+      <!-- Live SVG Preview -->
+      <div class="preview-card">
+        <div class="preview-header">
+          <span class="section-label">Vector Preview</span>
+          <span id="preview-filename" class="preview-filename">art.svg</span>
+        </div>
+        <div class="preview-viewport-wrapper">
+          <div id="preview-viewport" class="preview-viewport">
+            <!-- Injected SVG -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Grid -->
+      <div class="stats-grid">
+        <div class="stat-item">
+          <span class="stat-label">Dimensions</span>
+          <span id="stat-dim" class="stat-value">0 × 0 px</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Shapes</span>
+          <span id="stat-shapes" class="stat-value">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Loops / Paths</span>
+          <span id="stat-loops" class="stat-value">0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Palette</span>
+          <span id="stat-colors" class="stat-value">0 colors</span>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="actions-card">
+        <button id="btn-download-svg" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>Download SVG File</span>
+        </button>
+
+        <div class="btn-grid-row">
+          <button id="btn-download-png1" class="btn btn-secondary" title="Export 1x PNG">PNG 1x</button>
+          <button id="btn-download-png2" class="btn btn-secondary" title="Export 2x PNG">PNG 2x</button>
+          <button id="btn-download-png4" class="btn btn-secondary" title="Export 4x High-Res PNG">PNG 4x</button>
+        </div>
+
+        <button id="btn-copy-svg" class="btn btn-outline">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          <span id="copy-btn-text">Copy Raw SVG Code</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Empty State Guide -->
+    <div id="guide-content" class="guide-content">
+      <div class="guide-step">
+        <div class="step-num">1</div>
+        <div class="step-text">Open <a href="https://vectorizer.ai" target="_blank" class="step-link">Vectorizer.ai</a> or <a href="https://vectorize.ai" target="_blank" class="step-link">Vectorize.ai</a></div>
+      </div>
+      <div class="guide-step">
+        <div class="step-num">2</div>
+        <div class="step-text">Drag & drop your bitmap image (PNG, JPG, WebP) to convert</div>
+      </div>
+      <div class="guide-step">
+        <div class="step-num">3</div>
+        <div class="step-text">Once traced, click <strong>Download SVG</strong> in this popup or using the on-page floating toolbar!</div>
+      </div>
+    </div>
+
+    <!-- Microstock Tip Banner -->
+    <footer class="popup-footer">
+      <div class="footer-tip">
+        <strong>💡 Microstock Tip:</strong> Use <em>Transparent</em> background for Shutterstock, Freepik, and Adobe Stock submissions.
+      </div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

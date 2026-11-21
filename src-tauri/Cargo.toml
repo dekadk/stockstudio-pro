@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/stockstudio-license-core", "crates/stockstudio-nmh"]
+
 [package]
 name = "stockstudio-pro"
 version = "0.2.0"
@@ -11,6 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+stockstudio-license-core = { path = "crates/stockstudio-license-core" }
 tauri = { version = "2", features = ["unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -8,8 +8,10 @@
     "dev:setup": "node scripts/generate-dev-vars.mjs",
     "dev:bootstrap": "node scripts/bootstrap-local.mjs",
     "staging:bootstrap": "node scripts/bootstrap-staging.mjs",
+    "prod:bootstrap": "node scripts/bootstrap-production.mjs",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "db:migrate:prod": "node scripts/migrate-production.mjs",
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

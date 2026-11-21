@@ -1,10 +1,293 @@
-use std::time::Duration;
-use tauri::Manager;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod account_store;
+mod download_manager;
 mod license_store;
 mod webview_manager;
+
+const ACCOUNT_POPOVER_LABEL: &str = "account-switcher-popover";
+const ACCOUNT_POPOVER_DATA_EVENT: &str = "stockstudio-account-popover-data";
+const ACCOUNT_SWITCH_EVENT: &str = "stockstudio-account-switch";
+const ACCOUNT_ADD_EVENT: &str = "stockstudio-account-add";
+const POPOVER_BLUR_GRACE_MS: u64 = 250;
+const POPOVER_REOPEN_DEBOUNCE_MS: u64 = 250;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct AccountMenuEntry {
+    id: String,
+    name: String,
+    avatar_url: Option<String>,
+    is_active: bool,
+    is_live: bool,
+}
+
+#[derive(Default)]
+struct AccountPopoverInner {
+    entries: Vec<AccountMenuEntry>,
+    opened_at: Option<Instant>,
+    closed_at: Option<Instant>,
+}
+
+#[derive(Default)]
+struct AccountPopoverState(Mutex<AccountPopoverInner>);
+
+/// Computes compact no-scroll logical dimensions so every registered account row
+/// and the "Add Google Account" footer are fully visible without clipping or scrollbars.
+fn compute_account_popover_size(
+    account_count: usize,
+    max_logical_height: Option<f64>,
+) -> (f64, f64) {
+    const POPOVER_WIDTH: f64 = 268.0;
+    const ROW_HEIGHT: f64 = 42.0;
+    const ROW_GAP: f64 = 2.0;
+    const SURFACE_PADDING: f64 = 14.0;
+    const DIVIDER_HEIGHT: f64 = 11.0;
+    const FOOTER_HEIGHT: f64 = 40.0;
+    let rows = account_count.max(1) as f64;
+    let gaps = (account_count.saturating_sub(1)) as f64 * ROW_GAP;
+    let natural_height =
+        SURFACE_PADDING + rows * ROW_HEIGHT + gaps + DIVIDER_HEIGHT + FOOTER_HEIGHT;
+    let ceiling = max_logical_height
+        .filter(|h| h.is_finite() && *h >= 140.0)
+        .unwrap_or(900.0);
+    (POPOVER_WIDTH, natural_height.min(ceiling))
+}
+
+fn clamp_popover_physical_position(
+    desired_x: i32,
+    desired_y: i32,
+    phys_width: i32,
+    phys_height: i32,
+    work_area: Option<(i32, i32, i32, i32)>,
+) -> (i32, i32) {
+    let Some((area_x, area_y, area_w, area_h)) = work_area else {
+        return (desired_x, desired_y);
+    };
+    let margin = 8;
+    let min_x = area_x + margin;
+    let max_x = (area_x + area_w - phys_width - margin).max(min_x);
+    let min_y = area_y + margin;
+    let max_y = (area_y + area_h - phys_height - margin).max(min_y);
+    (desired_x.clamp(min_x, max_x), desired_y.clamp(min_y, max_y))
+}
+
+fn within_window(timestamp: Option<Instant>, now: Instant, window_ms: u64) -> bool {
+    timestamp
+        .and_then(|ts| now.checked_duration_since(ts))
+        .map_or(false, |elapsed| elapsed < Duration::from_millis(window_ms))
+}
+
+#[tauri::command]
+fn get_account_popover_state(
+    state: tauri::State<AccountPopoverState>,
+) -> Result<Vec<AccountMenuEntry>, String> {
+    state
+        .0
+        .lock()
+        .map(|inner| inner.entries.clone())
+        .map_err(|_| "account popover state unavailable".to_string())
+}
+
+#[tauri::command]
+async fn hide_account_switcher_popover(app: tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut inner) = app.state::<AccountPopoverState>().0.lock() {
+        inner.closed_at = Some(Instant::now());
+    }
+    if let Some(popover) = app.get_webview_window(ACCOUNT_POPOVER_LABEL) {
+        let _ = popover.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn select_account_from_popover(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<(), String> {
+    if let Ok(mut inner) = app.state::<AccountPopoverState>().0.lock() {
+        inner.closed_at = Some(Instant::now());
+    }
+    if let Some(popover) = app.get_webview_window(ACCOUNT_POPOVER_LABEL) {
+        let _ = popover.hide();
+    }
+    let _ = app.emit_to("main", ACCOUNT_SWITCH_EVENT, account_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn add_account_from_popover(app: tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut inner) = app.state::<AccountPopoverState>().0.lock() {
+        inner.closed_at = Some(Instant::now());
+    }
+    if let Some(popover) = app.get_webview_window(ACCOUNT_POPOVER_LABEL) {
+        let _ = popover.hide();
+    }
+    let _ = app.emit_to("main", ACCOUNT_ADD_EVENT, ());
+    Ok(())
+}
+
+/// Toggles an owned top-level popover window anchored below the Account Selector button.
+/// Uses `app.get_window("main")` (not `get_webview_window("main")`, which can fail once
+/// child Google Flow WebViews are attached) and Win32 `owner_raw(main_hwnd)` so Windows DWM
+/// guarantees the popover floats strictly above `main` and all embedded WebView2 HWNDs
+/// while keeping Google Flow 100% visible and never floating above unrelated apps.
+#[tauri::command]
+async fn toggle_account_switcher_popover(
+    app: tauri::AppHandle,
+    anchor_right: f64,
+    anchor_bottom: f64,
+    accounts: Vec<AccountMenuEntry>,
+) -> Result<bool, String> {
+    if !anchor_right.is_finite()
+        || !anchor_bottom.is_finite()
+        || anchor_right < 0.0
+        || anchor_bottom < 0.0
+    {
+        return Err("invalid popover anchor".to_string());
+    }
+    if accounts.is_empty() {
+        return Ok(false);
+    }
+
+    let now = Instant::now();
+    {
+        let state = app.state::<AccountPopoverState>();
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "account popover state unavailable".to_string())?;
+        if within_window(guard.closed_at, now, POPOVER_REOPEN_DEBOUNCE_MS) {
+            guard.closed_at = None;
+            return Ok(false);
+        }
+        guard.entries = accounts.clone();
+    }
+
+    let main_window = app
+        .get_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let scale = main_window.scale_factor().unwrap_or(1.0);
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let inner_pos = main_window
+        .inner_position()
+        .map_err(|e| format!("failed to read main window position: {e}"))?;
+
+    let work_area = main_window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| main_window.primary_monitor().ok().flatten())
+        .map(|monitor| {
+            let area = monitor.work_area();
+            (
+                area.position.x,
+                area.position.y,
+                area.size.width as i32,
+                area.size.height as i32,
+            )
+        });
+    let max_logical_height = work_area.map(|(_, _, _, area_h)| (f64::from(area_h) / scale) - 32.0);
+    let (width, height) = compute_account_popover_size(accounts.len(), max_logical_height);
+    let phys_width = (width * scale).round() as i32;
+    let phys_height = (height * scale).round() as i32;
+    let desired_x = inner_pos.x + (anchor_right * scale).round() as i32 - phys_width;
+    let desired_y = inner_pos.y + (anchor_bottom * scale).round() as i32;
+    let (phys_x, phys_y) =
+        clamp_popover_physical_position(desired_x, desired_y, phys_width, phys_height, work_area);
+
+    if let Some(popover) = app.get_webview_window(ACCOUNT_POPOVER_LABEL) {
+        if popover.is_visible().unwrap_or(false) {
+            if let Ok(mut guard) = app.state::<AccountPopoverState>().0.lock() {
+                guard.closed_at = Some(Instant::now());
+            }
+            let _ = popover.hide();
+            return Ok(false);
+        }
+        if let Ok(mut guard) = app.state::<AccountPopoverState>().0.lock() {
+            guard.opened_at = Some(Instant::now());
+            guard.closed_at = None;
+        }
+        popover
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))
+            .map_err(|e| e.to_string())?;
+        popover
+            .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                phys_x, phys_y,
+            )))
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit_to(ACCOUNT_POPOVER_LABEL, ACCOUNT_POPOVER_DATA_EVENT, accounts);
+        popover.show().map_err(|e| e.to_string())?;
+        let _ = popover.set_focus();
+        return Ok(true);
+    }
+
+    if let Ok(mut guard) = app.state::<AccountPopoverState>().0.lock() {
+        guard.opened_at = Some(Instant::now());
+        guard.closed_at = None;
+    }
+
+    let logical_x = f64::from(phys_x) / scale;
+    let logical_y = f64::from(phys_y) / scale;
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        ACCOUNT_POPOVER_LABEL,
+        tauri::WebviewUrl::App("index.html?popover=account-switcher".into()),
+    )
+    .title("Account Switcher")
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(false)
+    .skip_taskbar(true)
+    .shadow(true)
+    .theme(Some(tauri::Theme::Dark))
+    .background_color(tauri::window::Color(30, 32, 36, 255))
+    .inner_size(width, height)
+    .position(logical_x, logical_y)
+    .focused(true)
+    .visible(false);
+
+    #[cfg(target_os = "windows")]
+    {
+        let owner_hwnd = main_window
+            .hwnd()
+            .map_err(|e| format!("failed to read main window hwnd: {e}"))?;
+        builder = builder.owner_raw(owner_hwnd);
+    }
+
+    let popover = builder
+        .build()
+        .map_err(|e| format!("failed to build account switcher popover: {e}"))?;
+
+    let _ = popover.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        phys_x, phys_y,
+    )));
+
+    let hide_handle = popover.clone();
+    let event_app = app.clone();
+    popover.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(false) = event {
+            let now = Instant::now();
+            if let Ok(mut guard) = event_app.state::<AccountPopoverState>().0.lock() {
+                if within_window(guard.opened_at, now, POPOVER_BLUR_GRACE_MS) {
+                    return;
+                }
+                guard.closed_at = Some(now);
+            }
+            let _ = hide_handle.hide();
+        }
+    });
+
+    popover.show().map_err(|e| e.to_string())?;
+    let _ = popover.set_focus();
+    Ok(true)
+}
 
 async fn run_on_ui_thread<F, T>(app: &tauri::AppHandle, operation: F) -> Result<T, String>
 where
@@ -33,10 +316,42 @@ async fn open_google_flow(
     y: f64,
     width: f64,
     height: f64,
-) -> Result<(), String> {
+    target_url: Option<String>,
+    tool_id: Option<String>,
+) -> Result<webview_manager::WorkspaceSessionInfo, String> {
     let operation_app = app.clone();
     run_on_ui_thread(&app, move || {
-        webview_manager::open(&operation_app, account_id, x, y, width, height)
+        webview_manager::open(
+            &operation_app,
+            account_id,
+            x,
+            y,
+            width,
+            height,
+            target_url,
+            tool_id,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_google_flow_sessions(
+    app: tauri::AppHandle,
+) -> Result<Vec<webview_manager::WorkspaceSessionInfo>, String> {
+    let operation_app = app.clone();
+    run_on_ui_thread(&app, move || webview_manager::list_sessions(&operation_app)).await
+}
+
+#[tauri::command]
+async fn navigate_google_flow(
+    app: tauri::AppHandle,
+    account_id: String,
+    action: String,
+) -> Result<webview_manager::NavigationState, String> {
+    let operation_app = app.clone();
+    run_on_ui_thread(&app, move || {
+        webview_manager::navigate_action(&operation_app, account_id, action)
     })
     .await
 }
@@ -49,6 +364,19 @@ async fn close_google_flow(
     let operation_app = app.clone();
     run_on_ui_thread(&app, move || {
         webview_manager::close(&operation_app, account_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_google_flow_visible(
+    app: tauri::AppHandle,
+    account_id: String,
+    visible: bool,
+) -> Result<(), String> {
+    let operation_app = app.clone();
+    run_on_ui_thread(&app, move || {
+        webview_manager::set_visible(&operation_app, account_id, visible)
     })
     .await
 }
@@ -81,7 +409,9 @@ async fn remove_google_flow_account(
     .await
 }
 
-const ALLOWED_EXTERNAL_URLS: &[&str] = &[];
+/// Exact-match HTTPS allowlist for external browser links opened via `tauri-plugin-opener`.
+/// AIO Metadata is opened externally rather than embedded in a child WebView.
+const ALLOWED_EXTERNAL_URLS: &[&str] = &["https://share.gemini.google/CwUs3ZQJlnrk"];
 
 fn validate_external_url_with_allowlist(
     raw_url: &str,
@@ -188,6 +518,61 @@ fn expand_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn list_downloads(app: tauri::AppHandle) -> Result<Vec<download_manager::DownloadRecord>, String> {
+    download_manager::list_downloads(&app)
+}
+
+#[tauri::command]
+fn dismiss_download_toast(
+    app: tauri::AppHandle,
+    download_id: String,
+) -> Result<Vec<download_manager::DownloadRecord>, String> {
+    download_manager::dismiss_toast(&app, download_id)
+}
+
+#[tauri::command]
+fn dismiss_terminal_download_toasts(
+    app: tauri::AppHandle,
+) -> Result<Vec<download_manager::DownloadRecord>, String> {
+    download_manager::dismiss_terminal_toasts(&app)
+}
+
+#[tauri::command]
+fn open_downloads_history(app: tauri::AppHandle) -> Result<(), String> {
+    let _ = download_manager::dismiss_terminal_toasts(&app);
+    let _ = app.emit_to("main", download_manager::OPEN_DOWNLOADS_EVENT, ());
+    if let Some(main_window) = app.get_window("main") {
+        let _ = main_window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_download_record(
+    app: tauri::AppHandle,
+    download_id: String,
+) -> Result<Vec<download_manager::DownloadRecord>, String> {
+    download_manager::remove_record(&app, download_id)
+}
+
+#[tauri::command]
+fn clear_completed_downloads(
+    app: tauri::AppHandle,
+) -> Result<Vec<download_manager::DownloadRecord>, String> {
+    download_manager::clear_completed(&app)
+}
+
+#[tauri::command]
+fn reveal_download_in_folder(app: tauri::AppHandle, download_id: String) -> Result<(), String> {
+    download_manager::reveal_in_folder(&app, download_id)
+}
+
+#[tauri::command]
+fn open_downloaded_file(app: tauri::AppHandle, download_id: String) -> Result<(), String> {
+    download_manager::open_downloaded_file(&app, download_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -195,11 +580,29 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(webview_manager::WebviewManager::default())
+        .manage(AccountPopoverState::default())
+        .manage(download_manager::DownloadManager::default())
         .invoke_handler(tauri::generate_handler![
             expand_main_window,
             open_external_url,
+            toggle_account_switcher_popover,
+            get_account_popover_state,
+            hide_account_switcher_popover,
+            select_account_from_popover,
+            add_account_from_popover,
+            list_downloads,
+            dismiss_download_toast,
+            dismiss_terminal_download_toasts,
+            open_downloads_history,
+            remove_download_record,
+            clear_completed_downloads,
+            reveal_download_in_folder,
+            open_downloaded_file,
             open_google_flow,
+            list_google_flow_sessions,
+            navigate_google_flow,
             close_google_flow,
+            set_google_flow_visible,
             resize_google_flow,
             remove_google_flow_account,
             license_store::get_device_id,
@@ -219,9 +622,51 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
+        clamp_popover_physical_position, compute_account_popover_size,
         compute_expanded_logical_bounds, validate_external_url,
-        validate_external_url_with_allowlist, ALLOWED_EXTERNAL_URLS,
+        validate_external_url_with_allowlist, within_window,
     };
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn computes_no_scroll_account_popover_dimensions_for_all_accounts() {
+        assert_eq!(compute_account_popover_size(1, Some(800.0)), (268.0, 107.0));
+        assert_eq!(compute_account_popover_size(3, Some(800.0)), (268.0, 195.0));
+        assert_eq!(compute_account_popover_size(8, Some(800.0)), (268.0, 415.0));
+        assert_eq!(
+            compute_account_popover_size(25, Some(600.0)),
+            (268.0, 600.0)
+        );
+    }
+
+    #[test]
+    fn clamps_popover_within_monitor_work_area() {
+        let area = Some((0, 0, 1920, 1040));
+        assert_eq!(
+            clamp_popover_physical_position(1700, 120, 268, 195, area),
+            (1644, 120)
+        );
+        assert_eq!(
+            clamp_popover_physical_position(-50, 950, 268, 195, area),
+            (8, 837)
+        );
+    }
+
+    #[test]
+    fn enforces_blur_grace_and_reopen_debounce_window() {
+        let now = Instant::now();
+        assert!(within_window(
+            Some(now),
+            now + Duration::from_millis(100),
+            250
+        ));
+        assert!(!within_window(
+            Some(now),
+            now + Duration::from_millis(300),
+            250
+        ));
+        assert!(!within_window(None, now, 250));
+    }
 
     #[test]
     fn uses_default_logical_bounds_without_monitor() {
@@ -252,8 +697,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_valid_https_when_allowlist_is_empty() {
-        assert!(ALLOWED_EXTERNAL_URLS.is_empty());
+    fn allows_registered_aio_metadata_and_rejects_unlisted_https_urls() {
+        assert!(validate_external_url("https://share.gemini.google/CwUs3ZQJlnrk").is_ok());
+        assert!(validate_external_url("https://share.gemini.google/other").is_err());
         assert!(validate_external_url("https://example.com").is_err());
         assert!(validate_external_url("https://stockstudio.example/buy").is_err());
     }

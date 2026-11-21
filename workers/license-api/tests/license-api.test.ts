@@ -962,4 +962,564 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
     expect(detailAfterRefund.body.license.status).toBe("revoked");
     expect(detailAfterRefund.body.license.devices_used).toBe(0);
   });
+
+  // ---------------------------------------------------------------------------
+  // TEST 8: Native entitlements.products (Unified, Desktop-only, Extension-only,
+  // Legacy features-only, Validation & Malformed Data)
+  // ---------------------------------------------------------------------------
+  it("8. Preserves entitlements.products across create, DB storage, retrieval, update, and signed leases while keeping legacy compatibility", async () => {
+    // 8a. Unified Desktop + Extension license (products without using features as workaround)
+    const unifiedCreate = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "pro_unified_lifetime",
+        plan_name: "StockStudio Pro Unified Lifetime",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: {
+          products: ["desktop", "vectorizer_extension"],
+          features: [],
+        },
+      }),
+    });
+    expect(unifiedCreate.status).toBe(201);
+    expect(unifiedCreate.body.license.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+    expect(unifiedCreate.body.license.entitlements.features).toEqual([]);
+
+    const unifiedId = unifiedCreate.body.license.license_id as string;
+    const unifiedKey = unifiedCreate.body.license_key as string;
+
+    // Verify D1 persistence in entitlements_json
+    const dbUnified = await db
+      .prepare("SELECT entitlements_json FROM licenses WHERE id = ?1")
+      .bind(unifiedId)
+      .first<{ entitlements_json: string }>();
+    expect(dbUnified).not.toBeNull();
+    const persistedUnified = JSON.parse(dbUnified!.entitlements_json);
+    expect(persistedUnified.products).toEqual(["desktop", "vectorizer_extension"]);
+
+    // Verify retrieval via GET /v1/admin/licenses/:id
+    const unifiedDetail = await callApi(`/v1/admin/licenses/${unifiedId}`, {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(unifiedDetail.status).toBe(200);
+    expect(unifiedDetail.body.license.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+
+    // Verify signed lease payload on activate and validate
+    const actRes = await callApi("/v1/licenses/activate", {
+      method: "POST",
+      headers: clientHeaders(),
+      body: JSON.stringify({ license_key: unifiedKey, device: device1 }),
+    });
+    expect(actRes.status).toBe(200);
+    const verifiedAct = await verifyEntitlementLease(
+      actRes.body.lease_token,
+      publicKeyBase64
+    );
+    expect(verifiedAct.valid).toBe(true);
+    expect(verifiedAct.payload?.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+    expect(verifiedAct.payload?.entitlements.features).toEqual([]);
+
+    const valRes = await callApi("/v1/licenses/validate", {
+      method: "POST",
+      headers: clientHeaders({
+        Authorization: `Bearer ${actRes.body.activation_token}`,
+      }),
+      body: JSON.stringify({ device: device1 }),
+    });
+    expect(valRes.status).toBe(200);
+    const verifiedVal = await verifyEntitlementLease(
+      valRes.body.lease_token,
+      publicKeyBase64
+    );
+    expect(verifiedVal.valid).toBe(true);
+    expect(verifiedVal.payload?.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+
+    // 8b. Desktop-only license
+    const desktopOnly = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "desktop_only",
+        plan_name: "Desktop Only",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: { products: ["desktop"] },
+      }),
+    });
+    expect(desktopOnly.status).toBe(201);
+    expect(desktopOnly.body.license.entitlements.products).toEqual(["desktop"]);
+
+    // 8c. Extension-only license
+    const extOnly = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "ext_only",
+        plan_name: "Extension Only",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: { products: ["vectorizer_extension"], features: [] },
+      }),
+    });
+    expect(extOnly.status).toBe(201);
+    expect(extOnly.body.license.entitlements.products).toEqual([
+      "vectorizer_extension",
+    ]);
+
+    // 8d. Legacy features-only license (no products field invented)
+    const legacyCreate = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "legacy_desktop",
+        plan_name: "Legacy Desktop",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: { features: ["google_flow_workspace"] },
+      }),
+    });
+    expect(legacyCreate.status).toBe(201);
+    expect(legacyCreate.body.license.entitlements.products).toBeUndefined();
+    expect(legacyCreate.body.license.entitlements.features).toEqual([
+      "google_flow_workspace",
+    ]);
+
+    const legacyAct = await callApi("/v1/licenses/activate", {
+      method: "POST",
+      headers: clientHeaders(),
+      body: JSON.stringify({
+        license_key: legacyCreate.body.license_key,
+        device: device2,
+      }),
+    });
+    expect(legacyAct.status).toBe(200);
+    const verifiedLegacy = await verifyEntitlementLease(
+      legacyAct.body.lease_token,
+      publicKeyBase64
+    );
+    expect(verifiedLegacy.valid).toBe(true);
+    expect(verifiedLegacy.payload?.entitlements.products).toBeUndefined();
+
+    // 8e. Reject unsupported product identifiers, empty products array, and malformed entitlements
+    const badProd = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "bad_prod",
+        plan_name: "Bad Product",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: { products: ["desktop", "unknown_product"] },
+      }),
+    });
+    expect(badProd.status).toBe(400);
+    expect(badProd.body.error.code).toBe("INVALID_REQUEST");
+
+    const emptyProd = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "empty_prod",
+        plan_name: "Empty Product",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: { products: [] },
+      }),
+    });
+    expect(emptyProd.status).toBe(400);
+
+    const malformedEnt = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "malformed_ent",
+        plan_name: "Malformed Entitlements",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: "not-an-object",
+      }),
+    });
+    expect(malformedEnt.status).toBe(400);
+
+    // PATCH update rejects unsupported product and preserves valid products
+    const badPatch = await callApi(`/v1/admin/licenses/${unifiedId}`, {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        entitlements: { products: ["invalid_id"] },
+      }),
+    });
+    expect(badPatch.status).toBe(400);
+
+    // Corrupted entitlements_json in D1 falls back safely without granting vectorizer_extension
+    await db
+      .prepare("UPDATE licenses SET entitlements_json = '{corrupted-json' WHERE id = ?1")
+      .bind(legacyCreate.body.license.license_id)
+      .run();
+    const corruptedDetail = await callApi(
+      `/v1/admin/licenses/${legacyCreate.body.license.license_id}`,
+      {
+        method: "GET",
+        headers: adminHeaders(superAdminToken),
+      }
+    );
+    expect(corruptedDetail.status).toBe(200);
+    expect(corruptedDetail.body.license.entitlements.products).toBeUndefined();
+    expect(corruptedDetail.body.license.entitlements.features).not.toContain(
+      "vectorizer_extension"
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 9: IP_HASH_SALT Required (No Insecure Default Fallback)
+  // ---------------------------------------------------------------------------
+  it("9. Fails closed with 503 when IP_HASH_SALT is missing or too short and succeeds when configured", async () => {
+    const req = new Request("https://license-api.test/v1/health", {
+      method: "GET",
+    });
+
+    // Missing IP_HASH_SALT
+    const envMissingSalt: Env = { ...env, IP_HASH_SALT: "" };
+    const missingRes = await handleRequest(req, envMissingSalt, baseNow);
+    expect(missingRes.status).toBe(503);
+    const missingBody = (await missingRes.json()) as Record<string, any>;
+    expect(missingBody.ok).toBe(false);
+    expect(missingBody.error.code).toBe("SERVICE_UNAVAILABLE");
+
+    // Too-short IP_HASH_SALT
+    const envShortSalt: Env = { ...env, IP_HASH_SALT: "short-salt" };
+    const shortRes = await handleRequest(req, envShortSalt, baseNow);
+    expect(shortRes.status).toBe(503);
+
+    // Valid IP_HASH_SALT succeeds
+    const validRes = await handleRequest(req, env, baseNow);
+    expect(validRes.status).toBe(200);
+    const validBody = (await validRes.json()) as Record<string, any>;
+    expect(validBody.ok).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 10: Admin API allowed_ips_json Enforcement
+  // ---------------------------------------------------------------------------
+  it("10. Enforces admin_api_keys.allowed_ips_json while keeping unset/empty allowlists unrestricted", async () => {
+    // Seed three admin keys: restricted IP, empty allowlist [], and malformed allowlist
+    const mkAdmin = async (name: string, allowedIpsJson: string | null) => {
+      const id = generatePrefixedId("adm", baseNow.getTime() + Math.floor(Math.random() * 10000));
+      const { adminApiKey, keyPrefix } = generateAdminApiKey(id);
+      const keyHash = await hashAdminApiKey(env.ADMIN_TOKEN_PEPPER, adminApiKey);
+      await db
+        .prepare(
+          `INSERT INTO admin_api_keys (id, name, key_prefix, key_hash, role, status, allowed_ips_json, created_at)
+           VALUES (?1, ?2, ?3, ?4, 'super_admin', 'active', ?5, ?6)`
+        )
+        .bind(id, name, keyPrefix, keyHash, allowedIpsJson, baseNow.toISOString())
+        .run();
+      return adminApiKey;
+    };
+
+    const restrictedToken = await mkAdmin(
+      "IP Restricted Admin",
+      JSON.stringify(["203.0.113.10", "198.51.100.5"])
+    );
+    const emptyListToken = await mkAdmin("Empty Allowlist Admin", JSON.stringify([]));
+    const malformedListToken = await mkAdmin("Malformed Allowlist Admin", "{bad-json");
+
+    // Allowed IP -> succeeds (201)
+    const allowedRes = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(restrictedToken, { "CF-Connecting-IP": "203.0.113.10" }),
+      body: JSON.stringify({
+        plan_code: "ip_ok",
+        plan_name: "IP Allowed",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    expect(allowedRes.status).toBe(201);
+
+    // Denied IP -> rejected (403 FORBIDDEN_ROLE)
+    const deniedRes = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(restrictedToken, { "CF-Connecting-IP": "192.0.2.99" }),
+      body: JSON.stringify({
+        plan_code: "ip_denied",
+        plan_name: "IP Denied",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    expect(deniedRes.status).toBe(403);
+    expect(deniedRes.body.error.code).toBe("FORBIDDEN_ROLE");
+
+    // Unset (null) allowlist (superAdminToken) -> unrestricted from any IP
+    const unrestrictedNull = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken, { "CF-Connecting-IP": "192.0.2.77" }),
+      body: JSON.stringify({
+        plan_code: "ip_null",
+        plan_name: "IP Unrestricted Null",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    expect(unrestrictedNull.status).toBe(201);
+
+    // Empty allowlist [] -> unrestricted from any IP
+    const unrestrictedEmpty = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(emptyListToken, { "CF-Connecting-IP": "192.0.2.88" }),
+      body: JSON.stringify({
+        plan_code: "ip_empty",
+        plan_name: "IP Unrestricted Empty",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    expect(unrestrictedEmpty.status).toBe(201);
+
+    // Malformed allowlist JSON -> fail closed (403)
+    const malformedRes = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(malformedListToken, { "CF-Connecting-IP": "203.0.113.10" }),
+      body: JSON.stringify({
+        plan_code: "ip_malformed",
+        plan_name: "IP Malformed",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    expect(malformedRes.status).toBe(403);
+    expect(malformedRes.body.error.code).toBe("FORBIDDEN_ROLE");
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 11: Trusted Client IP (No XFF Spoofing in Prod/Staging, Dev Compat,
+  // IPv4 & IPv6 Canonical/Equivalent Matching)
+  // ---------------------------------------------------------------------------
+  it("11. Trusts CF-Connecting-IP exclusively in production/staging, blocks X-Forwarded-For spoofing, preserves dev compatibility, and matches canonical IPv4/IPv6", async () => {
+    const mkAdmin = async (name: string, allowedIpsJson: string) => {
+      const id = generatePrefixedId(
+        "adm",
+        baseNow.getTime() + Math.floor(Math.random() * 100000)
+      );
+      const { adminApiKey, keyPrefix } = generateAdminApiKey(id);
+      const keyHash = await hashAdminApiKey(env.ADMIN_TOKEN_PEPPER, adminApiKey);
+      await db
+        .prepare(
+          `INSERT INTO admin_api_keys (id, name, key_prefix, key_hash, role, status, allowed_ips_json, created_at)
+           VALUES (?1, ?2, ?3, ?4, 'super_admin', 'active', ?5, ?6)`
+        )
+        .bind(id, name, keyPrefix, keyHash, allowedIpsJson, baseNow.toISOString())
+        .run();
+      return adminApiKey;
+    };
+
+    const ipv4Token = await mkAdmin("Prod IPv4 Admin", JSON.stringify(["203.0.113.10"]));
+    const ipv6Token = await mkAdmin(
+      "Prod IPv6 Admin",
+      JSON.stringify(["2001:0db8:0000:0000:0000:0000:0000:0001"])
+    );
+    const badEntryToken = await mkAdmin(
+      "Bad Entry Admin",
+      JSON.stringify(["203.0.113.10", "not-an-ip"])
+    );
+    const prodEnv: Env = { ...env, ENVIRONMENT: "production" };
+    const stagingEnv: Env = { ...env, ENVIRONMENT: "staging" };
+
+    const callWithEnv = async (targetEnv: Env, token: string, headers: Record<string, string>) => {
+      const req = new Request("https://license.stockstudiopro.test/v1/admin/licenses", {
+        method: "POST",
+        headers: adminHeaders(token, headers),
+        body: JSON.stringify({
+          plan_code: "ip_test",
+          plan_name: "IP Test",
+          license_type: "perpetual",
+          billing_interval: "lifetime",
+        }),
+      });
+      const res = await handleRequest(req, targetEnv, baseNow);
+      return { status: res.status, body: (await res.json()) as Record<string, any> };
+    };
+
+    // 11a. X-Forwarded-For spoofing CANNOT bypass allowlist in production (missing CF-Connecting-IP)
+    const spoofProd = await callWithEnv(prodEnv, ipv4Token, {
+      "X-Forwarded-For": "203.0.113.10",
+    });
+    expect(spoofProd.status).toBe(403);
+    expect(spoofProd.body.error.code).toBe("FORBIDDEN_ROLE");
+
+    // 11b. X-Forwarded-For spoofing CANNOT override CF-Connecting-IP in staging
+    const spoofStaging = await callWithEnv(stagingEnv, ipv4Token, {
+      "CF-Connecting-IP": "198.51.100.99",
+      "X-Forwarded-For": "203.0.113.10",
+    });
+    expect(spoofStaging.status).toBe(403);
+
+    // 11c. Missing CF-Connecting-IP in production fails closed even if allowlist contains 127.0.0.1
+    const localhostToken = await mkAdmin("Localhost Admin", JSON.stringify(["127.0.0.1"]));
+    const missingCfProd = await callWithEnv(prodEnv, localhostToken, {});
+    expect(missingCfProd.status).toBe(403);
+
+    // 11d. Local development environment preserves X-Forwarded-For / 127.0.0.1 compatibility
+    const devLocalhost = await callWithEnv(env, localhostToken, {});
+    expect(devLocalhost.status).toBe(201);
+    const devXff = await callWithEnv(env, ipv4Token, {
+      "X-Forwarded-For": "203.0.113.10, 10.0.0.1",
+    });
+    expect(devXff.status).toBe(201);
+
+    // 11e. IPv4 allowlist match & mismatch in production via CF-Connecting-IP
+    const ipv4Match = await callWithEnv(prodEnv, ipv4Token, {
+      "CF-Connecting-IP": "203.0.113.10",
+    });
+    expect(ipv4Match.status).toBe(201);
+    const ipv4Mismatch = await callWithEnv(prodEnv, ipv4Token, {
+      "CF-Connecting-IP": "203.0.113.11",
+    });
+    expect(ipv4Mismatch.status).toBe(403);
+
+    // 11f. IPv6 canonical & equivalent compressed/uppercase representation matching
+    const ipv6Compressed = await callWithEnv(prodEnv, ipv6Token, {
+      "CF-Connecting-IP": "2001:DB8::1",
+    });
+    expect(ipv6Compressed.status).toBe(201);
+    const ipv6Mismatch = await callWithEnv(prodEnv, ipv6Token, {
+      "CF-Connecting-IP": "2001:db8::2",
+    });
+    expect(ipv6Mismatch.status).toBe(403);
+
+    // 11g. Malformed allowlist entry fails closed even if another entry matches
+    const badEntryRes = await callWithEnv(prodEnv, badEntryToken, {
+      "CF-Connecting-IP": "203.0.113.10",
+    });
+    expect(badEntryRes.status).toBe(403);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 12: Partial PATCH Entitlement Preservation & Top-Level Column Sync
+  // ---------------------------------------------------------------------------
+  it("12. Preserves products/features on partial PATCH and synchronizes updates_until and max_app_version columns including clearing", async () => {
+    const created = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "patch_sync_pro",
+        plan_name: "Patch Sync Pro",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        entitlements: {
+          products: ["desktop", "vectorizer_extension"],
+          features: ["google_flow_workspace", "multi_account_manager"],
+          max_accounts: 10,
+          updates_until: "2027-01-01T00:00:00Z",
+          max_app_version: "0.9.0",
+        },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const licenseId = created.body.license.license_id as string;
+
+    // 12a. Partial PATCH updating only max_accounts preserves products, features, updates_until, max_app_version
+    const partialPatch = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        entitlements: { max_accounts: 25 },
+      }),
+    });
+    expect(partialPatch.status).toBe(200);
+
+    const afterPartial = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(afterPartial.body.license.entitlements).toEqual({
+      products: ["desktop", "vectorizer_extension"],
+      features: ["google_flow_workspace", "multi_account_manager"],
+      max_accounts: 25,
+      updates_until: "2027-01-01T00:00:00Z",
+      max_app_version: "0.9.0",
+    });
+
+    // 12b. PATCH updates_until and max_app_version updates BOTH top-level DB columns and parsed entitlements
+    const syncPatch = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        entitlements: {
+          updates_until: "2028-06-30T00:00:00Z",
+          max_app_version: "1.5.0",
+        },
+      }),
+    });
+    expect(syncPatch.status).toBe(200);
+
+    const dbRowAfterSync = await db
+      .prepare("SELECT updates_until, max_app_version FROM licenses WHERE id = ?1")
+      .bind(licenseId)
+      .first<{ updates_until: string | null; max_app_version: string | null }>();
+    expect(dbRowAfterSync?.updates_until).toBe("2028-06-30T00:00:00Z");
+    expect(dbRowAfterSync?.max_app_version).toBe("1.5.0");
+
+    const afterSync = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(afterSync.body.license.entitlements.updates_until).toBe(
+      "2028-06-30T00:00:00Z"
+    );
+    expect(afterSync.body.license.entitlements.max_app_version).toBe("1.5.0");
+    expect(afterSync.body.license.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+
+    // 12c. Clearing optional values (null) clears BOTH top-level columns and parsed entitlements
+    const clearPatch = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        entitlements: {
+          updates_until: null,
+          max_app_version: null,
+          max_accounts: null,
+        },
+      }),
+    });
+    expect(clearPatch.status).toBe(200);
+
+    const dbRowAfterClear = await db
+      .prepare("SELECT updates_until, max_app_version FROM licenses WHERE id = ?1")
+      .bind(licenseId)
+      .first<{ updates_until: string | null; max_app_version: string | null }>();
+    expect(dbRowAfterClear?.updates_until).toBeNull();
+    expect(dbRowAfterClear?.max_app_version).toBeNull();
+
+    const afterClear = await callApi(`/v1/admin/licenses/${licenseId}`, {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(afterClear.body.license.entitlements.updates_until).toBeNull();
+    expect(afterClear.body.license.entitlements.max_app_version).toBeNull();
+    expect(afterClear.body.license.entitlements.max_accounts).toBeNull();
+    expect(afterClear.body.license.entitlements.products).toEqual([
+      "desktop",
+      "vectorizer_extension",
+    ]);
+  });
 });

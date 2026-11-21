@@ -9,6 +9,7 @@
 // - Constant-time comparison is used for all hash/token checks.
 // =============================================================================
 
+import { ApiError } from "./errors";
 import { SignedLeasePayload } from "./types";
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -213,14 +214,24 @@ export async function hashAdminApiKey(
 
 /**
  * Privacy-preserving daily salted IP hash for rate-limiting and audit trail.
+ * Requires an explicit `IP_HASH_SALT` secret (>= 16 chars) and fails closed if missing.
  */
 export async function hashClientIp(
   ip: string,
   salt: string | undefined,
   nowIso: string
 ): Promise<string> {
+  const trimmedSalt = typeof salt === "string" ? salt.trim() : "";
+  if (trimmedSalt.length < 16) {
+    throw new ApiError({
+      code: "SERVICE_UNAVAILABLE",
+      status: 503,
+      message: "Server IP hashing configuration is missing or invalid.",
+      retryable: false,
+    });
+  }
   const dayBucket = nowIso.slice(0, 10);
-  return sha256Hex(`StockStudioPro:ip:${salt ?? "default-salt"}:${dayBucket}:${ip}`);
+  return sha256Hex(`StockStudioPro:ip:${trimmedSalt}:${dayBucket}:${ip}`);
 }
 
 /**

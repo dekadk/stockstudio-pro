@@ -1,0 +1,615 @@
+/* Vectorize.ai Download - Content Stylesheet
+ * Design System: Blockstream-style Dark Technical UI, Orange Identity (#FE9300)
+ */
+
+#vectorize-ai-download-container,
+.vai-toast {
+  /* Brand */
+  --brand: #FE9300;
+  --brand-hover: #FFAA33;
+  --brand-pressed: #D97F00;
+  --brand-muted: rgba(254, 147, 0, 0.10);
+  --brand-border: rgba(254, 147, 0, 0.30);
+  --on-brand: #111316;
+
+  /* Surfaces and Text (Dark Only) */
+  --bg-primary: #111316;
+  --bg-secondary: #1E2024;
+  --bg-card: #1E2024;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A5A6A7;
+  --text-muted: #A5A6A7;
+  --border-color: rgba(255, 255, 255, 0.10);
+  --border-hover: var(--brand-border);
+
+  /* Support and Semantic */
+  --info: #04C3FB;
+  --info-deep: #0A5973;
+  --support-soft: #BCD0DC;
+  --success: #00D395;
+  --warning: #FACC15;
+  --danger: #EF4444;
+
+  /* Shape, Depth, Motion */
+  --radius-sm: 2px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 27px;
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --glow-brand: 0 0 24px rgba(254, 147, 0, 0.25);
+  --transition-base: 0.3s ease;
+  --blinking-width: 4px;
+
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Space Grotesk', 'Chakra Petch', 'Inter', -apple-system, sans-serif;
+}
+
+#vectorize-ai-download-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 2147483647;
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  pointer-events: auto;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Main Floating Card */
+.vai-widget-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-base), background var(--transition-base);
+  min-width: 300px;
+  max-width: 350px;
+}
+
+.vai-widget-card:hover {
+  border-color: var(--brand-border);
+}
+
+/* Collapsed Mini State */
+.vai-widget-card.vai-collapsed {
+  min-width: auto;
+  width: auto;
+}
+
+.vai-widget-card.vai-collapsed .vai-widget-body,
+.vai-widget-card.vai-collapsed .vai-widget-footer {
+  display: none;
+}
+
+/* Header */
+.vai-widget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 15px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: border-color var(--transition-base);
+}
+
+.vai-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+/* Feature icon: --brand text/stroke on --brand-muted circle */
+.vai-logo-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-muted);
+  border: 1px solid var(--brand-border);
+  color: var(--brand);
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+/* Badges and Status */
+.vai-status-badge {
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.01em;
+  max-width: 145px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vai-status-waiting {
+  background: var(--brand-muted);
+  color: var(--brand);
+  border: 1px solid var(--brand-border);
+}
+
+.vai-status-ready {
+  background: rgba(0, 211, 149, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(0, 211, 149, 0.35);
+}
+
+.vai-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vai-icon-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-base), border-color var(--transition-base), background var(--transition-base);
+}
+
+.vai-icon-btn:hover {
+  background: var(--bg-primary);
+  border-color: var(--brand-border);
+  color: var(--text-primary);
+}
+
+/* Body */
+.vai-widget-body {
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-primary);
+}
+
+/* Info Box (Card style) */
+.vai-info-box {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 12px 15px;
+  transition: border-color var(--transition-base);
+}
+
+.vai-info-box:hover {
+  border-color: var(--brand-border);
+}
+
+.vai-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vai-info-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vai-info-val {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Action Buttons */
+.vai-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vai-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  min-height: 40px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: color var(--transition-base), background var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.vai-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.vai-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  box-shadow: none !important;
+}
+
+/* Primary CTA — The single #FE9300 focal point with dark #111316 text */
+.vai-btn-primary {
+  background: var(--brand);
+  color: var(--on-brand);
+  border: none;
+  box-shadow: var(--glow-brand);
+}
+
+.vai-btn-primary svg {
+  stroke: var(--on-brand);
+}
+
+.vai-btn-primary:not(:disabled):hover {
+  background: var(--brand-hover);
+  color: var(--on-brand);
+}
+
+.vai-btn-primary:not(:disabled):active {
+  background: var(--brand-pressed);
+  color: var(--on-brand);
+}
+
+/* Secondary Button — Transparent / Dark surface with 1px hairline border */
+.vai-btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.vai-btn-secondary:not(:disabled):hover {
+  border-color: var(--brand-border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* Ghost / Technical Action Buttons (keep neutral so Primary CTA remains the single orange fill) */
+.vai-btn-accent {
+  background: var(--bg-secondary);
+  color: var(--brand);
+  border: 1px solid var(--brand-border);
+}
+
+.vai-btn-accent:not(:disabled):hover {
+  background: var(--brand-muted);
+  border-color: var(--brand);
+  color: var(--brand-hover);
+}
+
+.vai-btn-batch {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.vai-btn-batch:not(:disabled):hover {
+  border-color: var(--brand-border);
+  background: var(--brand-muted);
+  color: var(--brand);
+}
+
+.vai-btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.vai-btn-danger:not(:disabled):hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: var(--danger);
+}
+
+.vai-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.vai-btn-row .vai-btn {
+  flex: 1;
+  padding: 8px 10px;
+  min-height: 36px;
+  font-size: 13px;
+}
+
+/* ── Auto Controls Section ── */
+.vai-auto-controls {
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vai-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Toggle Switch */
+.vai-toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.vai-toggle-label input[type="checkbox"] {
+  display: none;
+}
+
+.vai-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  position: relative;
+  transition: background var(--transition-base), border-color var(--transition-base);
+  display: block;
+}
+
+.vai-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform var(--transition-base), background var(--transition-base);
+}
+
+.vai-toggle-label input:checked + .vai-toggle-track {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.vai-toggle-label input:checked + .vai-toggle-track::after {
+  transform: translateX(16px);
+  background: var(--on-brand);
+}
+
+/* ── Batch Folder Vectorization Section ── */
+.vai-batch-section {
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vai-section-title {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.vai-delay-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.vai-delay-input-wrap input[type="number"] {
+  width: 60px;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+  transition: border-color var(--transition-base);
+}
+
+.vai-delay-input-wrap input[type="number"]:focus {
+  border-color: var(--brand);
+}
+
+.vai-batch-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color var(--transition-base);
+}
+
+.vai-batch-panel:hover {
+  border-color: var(--brand-border);
+}
+
+.vai-hidden {
+  display: none !important;
+}
+
+.vai-batch-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+#vai-batch-counter {
+  color: var(--brand);
+  font-weight: 700;
+}
+
+.vai-batch-progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.vai-batch-progress-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-base);
+}
+
+.vai-batch-current-file {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Error Log Panel ── */
+.vai-log-section {
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vai-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.vai-log-clear-btn {
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--transition-base), border-color var(--transition-base), background var(--transition-base);
+}
+
+.vai-log-clear-btn:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.vai-log-panel {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 115px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  word-break: break-all;
+}
+
+.vai-log-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 2px 0;
+}
+
+.vai-log-info  { color: var(--info); }
+.vai-log-warn  { color: var(--warning); }
+.vai-log-error { color: var(--danger); }
+
+/* Toast Notification */
+.vai-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--brand-border);
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), var(--glow-brand);
+  font-family: var(--font-family);
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 2147483647;
+  transform: translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--transition-base), opacity var(--transition-base);
+}
+
+.vai-toast.vai-show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  .vai-widget-card,
+  .vai-widget-header,
+  .vai-icon-btn,
+  .vai-info-box,
+  .vai-btn,
+  .vai-toggle-track,
+  .vai-toggle-track::after,
+  .vai-batch-panel,
+  .vai-batch-progress-fill,
+  .vai-log-clear-btn,
+  .vai-toast {
+    transition: none !important;
+    animation: none !important;
+  }
+}

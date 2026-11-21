@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop permissions for StockStudio Pro",
-  "windows": ["main"],
+  "windows": ["main", "account-switcher-popover", "download-toast-popover"],
   "permissions": ["core:default", "updater:default", "process:allow-restart"]
 }

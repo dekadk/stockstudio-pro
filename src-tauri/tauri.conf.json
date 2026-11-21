@@ -3,13 +3,13 @@
   "productName": "StockStudio Pro",
   "version": "0.2.0",
   "identifier": "com.stockstudiopro.desktop",
-  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:5173", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:5173", "beforeBuildCommand": "npm run build && node scripts/prepare-nmh-bundle.mjs", "frontendDist": "../dist" },
   "app": { "windows": [{ "title": "StockStudio Pro", "width": 540, "height": 620, "minWidth": 540, "minHeight": 620, "resizable": false, "center": true, "decorations": true, "theme": "Dark" }], "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'", "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' http://localhost:5173; style-src 'self' 'unsafe-inline' http://localhost:5173; font-src 'self' http://localhost:5173; img-src 'self' data: http://localhost:5173; connect-src ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'" } },
-  "bundle": { "active": true, "targets": "nsis", "createUpdaterArtifacts": true, "icon": ["icons/icon.ico"], "windows": { "nsis": { "installerIcon": "icons/icon.ico", "uninstallerIcon": "icons/icon.ico", "installerHooks": "installer-hooks.nsh" } } },
+  "bundle": { "active": true, "targets": "nsis", "createUpdaterArtifacts": true, "externalBin": ["binaries/stockstudio-nmh"], "icon": ["icons/icon.ico"], "windows": { "nsis": { "installerIcon": "icons/icon.ico", "uninstallerIcon": "icons/icon.ico", "installerHooks": "installer-hooks.nsh" } } },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk4ODMzNjRDOTAwNzZCNEIKUldSTGF3ZVFURGFEbUp4Tk9xbDNESmRTbFF1TUlFakxJQWlkdis0VlhxcHY2MUtkQytYUmhIalYK",
-      "endpoints": ["https://github.com/masplangga/flowpilot/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2MUQ2NjI0QkVFMjQxNkQKUldSdFFlSytKR1lkRmtXU2N0dGdTbFZBdytPMW8yaGZZeXJIZzN5N3FJT1JUR2RDUm9IMkxhQ0gK",
+      "endpoints": ["https://github.com/dekadk/stockstudio-pro/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
   }

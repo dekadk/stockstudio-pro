@@ -1,0 +1,82 @@
+{
+  "manifest_version": 3,
+  "name": "Vectorize.ai Download",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs3duO0xFF8TfmLRUW3VC/B7YGXBh2ZXiMesg46lbMqdJo3HayM4vw0Sv0+bZd9FcDaxYEphgdo90XSRkO6Gc9OmBl1P/Q90pS+us3PjWAt0jNGvSvZ45QZ6BkwPnZ/U9MCYv2QQRYB4A/PgGeC7clMTpYxQd5dvMK8JKVTphXeOhFxzolcWGs2GWLWxIq5EWT/6x1By5FI/S7V/cvbU+iS49uYuCke0B/TDhmH1SADgEYfOUKxPcSbs/mt057jq/SWHri3bXf+hXdUb8/UBQ/3aN9Sy5Uq9fP2rXxdiCRAetjXQzHteAA9crjoxwGgOAqGLS1ryK1uf1lYypgOaM3QIDAQAB",
+  "description": "Export and download vector graphics (SVG/PNG) directly from Vectorize.ai and Vectorizer.ai free previews.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Vectorize.ai Download",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "*://vectorizer.ai/*",
+    "*://*.vectorizer.ai/*",
+    "*://vectorize.ai/*",
+    "*://*.vectorize.ai/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://vectorizer.ai/*",
+        "*://*.vectorizer.ai/*",
+        "*://vectorize.ai/*",
+        "*://*.vectorize.ai/*"
+      ],
+      "js": [
+        "injected/inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://vectorizer.ai/*",
+        "*://*.vectorizer.ai/*",
+        "*://vectorize.ai/*",
+        "*://*.vectorize.ai/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected/inject.js",
+        "icons/*"
+      ],
+      "matches": [
+        "*://vectorizer.ai/*",
+        "*://*.vectorizer.ai/*",
+        "*://vectorize.ai/*",
+        "*://*.vectorize.ai/*"
+      ]
+    }
+  ]
+}

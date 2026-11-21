@@ -3766,6 +3766,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stockstudio-license-core"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "stockstudio-nmh"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek",
+ "keyring",
+ "serde",
+ "serde_json",
+ "stockstudio-license-core",
+ "uuid",
+]
+
+[[package]]
 name = "stockstudio-pro"
 version = "0.2.0"
 dependencies = [
@@ -3777,6 +3805,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "stockstudio-license-core",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",

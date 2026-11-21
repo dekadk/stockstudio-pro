@@ -1,167 +1,23 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL};
-use base64::Engine;
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use keyring::Entry;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
+use stockstudio_license_core::{
+    clear_license_credentials_preserving_device_id, compute_device_fingerprint, ensure_device_id,
+    evaluate_offline_lease, is_terminal_error_code, lease_to_license_state,
+    map_error_code_to_user_message, parse_rfc3339, read_state_file, record_clock_anchor,
+    resolve_api_base_url, resolve_verifying_keys, sanitize_device_name, verify_signed_lease_token,
+    write_state_file_atomic, DeactivateLicenseResponse, DeviceIdentity, LicenseDeviceInfo,
+    LicenseDevicesResponse, LicenseState, SecretStore, KEYRING_ACTIVATION_TOKEN,
+    KEYRING_LICENSE_KEY, KEYRING_SERVICE, PRODUCT_ID,
+};
 use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
-use url::Url;
 use uuid::Uuid;
 
-const KEYRING_SERVICE: &str = "StockStudioPro";
-const KEYRING_DEVICE_ID: &str = "device-id";
-const KEYRING_LICENSE_KEY: &str = "license-key";
-const KEYRING_ACTIVATION_TOKEN: &str = "activation-token";
-const KEYRING_CLOCK_ANCHOR: &str = "clock-anchor";
-
-const PRODUCT_ID: &str = "com.stockstudiopro.desktop";
-const EXPECTED_ISSUER: &str = "stockstudiopro-license-server";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-const CLOCK_ROLLBACK_TOLERANCE_SECONDS: i64 = 300; // 5 minutes
-const OFFLINE_GRACE_MAX_SECONDS: i64 = 7 * 24 * 60 * 60; // 7 days
 const HTTP_TIMEOUT_SECONDS: u64 = 8;
-
-/// Local development fallback base URL (only used in debug builds when
-/// `STOCKSTUDIO_LICENSE_API_URL` is not explicitly set).
-#[cfg(debug_assertions)]
-const DEFAULT_DEV_API_BASE_URL: &str = "http://127.0.0.1:8787";
-
-/// Public Ed25519 verifying keys compiled into the desktop binary (never private keys).
-/// Additional keys can be provided via `STOCKSTUDIO_LICENSE_PUBLIC_KEY_BASE64`
-/// (compile-time or runtime env in dev/staging) for key rotation and local Worker testing.
-const EMBEDDED_VERIFYING_KEYS: &[(&str, &str)] = &[];
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LicenseEntitlements {
-    #[serde(default)]
-    pub features: Vec<String>,
-    #[serde(default)]
-    pub max_accounts: Option<u32>,
-    #[serde(default)]
-    pub updates_until: Option<String>,
-    #[serde(default)]
-    pub max_app_version: Option<String>,
-}
-
-/// Backward-compatible LicenseState consumed by `src/App.tsx`, extended with
-/// StockStudio Pro v0.2.0 dual-model (perpetual & subscription) and lease metadata.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LicenseState {
-    // Existing fields consumed by src/App.tsx
-    pub plan: String,
-    pub status: String,
-    pub expires_at: Option<String>,
-    pub lifetime: bool,
-    pub last_validated_at: String,
-    pub device_id: String,
-
-    // Extended StockStudio Pro v0.2.0 fields
-    #[serde(default)]
-    pub license_id: String,
-    #[serde(default)]
-    pub activation_id: String,
-    #[serde(default)]
-    pub key_prefix: String,
-    #[serde(default)]
-    pub license_type: String,
-    #[serde(default)]
-    pub billing_interval: String,
-    #[serde(default)]
-    pub current_period_start: Option<String>,
-    #[serde(default)]
-    pub current_period_end: Option<String>,
-    #[serde(default)]
-    pub cancel_at_period_end: bool,
-    #[serde(default)]
-    pub device_limit: u32,
-    #[serde(default)]
-    pub devices_used: u32,
-    #[serde(default)]
-    pub offline_grace_until: String,
-    #[serde(default)]
-    pub is_offline_grace: bool,
-    #[serde(default)]
-    pub entitlements: LicenseEntitlements,
-    #[serde(default)]
-    pub lease_token: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LicenseDeviceInfo {
-    pub activation_id: String,
-    pub device_id: String,
-    pub device_name: String,
-    pub platform: String,
-    #[serde(default)]
-    pub os_version: Option<String>,
-    #[serde(default)]
-    pub app_version: String,
-    pub status: String,
-    #[serde(default)]
-    pub is_current_device: bool,
-    pub activated_at: String,
-    pub last_validated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LicenseDevicesResponse {
-    pub license_id: String,
-    pub key_prefix: String,
-    pub license_type: String,
-    pub billing_interval: String,
-    pub status: String,
-    pub device_limit: u32,
-    pub devices_used: u32,
-    pub devices: Vec<LicenseDeviceInfo>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeactivateLicenseResponse {
-    pub deactivated_activation_id: String,
-    pub already_deactivated: bool,
-    pub license_id: String,
-    pub device_limit: u32,
-    pub devices_used: u32,
-    pub deactivated_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct SignedLeasePayload {
-    ver: u8,
-    kid: String,
-    #[allow(dead_code)]
-    jti: String,
-    iss: String,
-    aud: String,
-    iat: String,
-    exp: String,
-    offline_grace_until: String,
-    license_id: String,
-    activation_id: String,
-    device_id: String,
-    device_fingerprint: String,
-    plan_code: String,
-    plan_name: String,
-    license_type: String,
-    billing_interval: String,
-    status: String,
-    lifetime: bool,
-    expires_at: Option<String>,
-    current_period_start: Option<String>,
-    current_period_end: Option<String>,
-    #[serde(default)]
-    cancel_at_period_end: bool,
-    device_limit: u32,
-    devices_used: u32,
-    #[serde(default)]
-    entitlements: LicenseEntitlements,
-}
 
 #[derive(Clone, Debug, Deserialize)]
 struct ApiLicenseSummary {
@@ -227,28 +83,10 @@ struct ApiErrorDetail {
 }
 
 #[derive(Clone, Debug)]
-struct DeviceIdentity {
-    device_id: String,
-    device_fingerprint: String,
-    device_name: String,
-    platform: &'static str,
-    os_version: String,
-    arch: &'static str,
-}
-
-#[derive(Clone, Debug)]
 struct LicenseClientConfig {
     api_base_url: String,
     verifying_keys: Vec<(Option<String>, String)>,
     http_timeout: Duration,
-}
-
-/// Abstract secret storage so production uses Windows Credential Manager (`keyring` v3)
-/// while unit/integration tests can run deterministically in memory without mutating OS credentials.
-trait SecretStore: Send + Sync {
-    fn get_secret(&self, account: &str) -> Result<Option<String>, String>;
-    fn set_secret(&self, account: &str, value: &str) -> Result<(), String>;
-    fn delete_secret(&self, account: &str) -> Result<(), String>;
 }
 
 struct KeyringSecretStore;
@@ -284,120 +122,9 @@ enum ApiCallFailure {
     Transient(String),
 }
 
-fn is_terminal_error_code(code: &str) -> bool {
-    matches!(
-        code,
-        "LICENSE_REVOKED"
-            | "LICENSE_SUSPENDED"
-            | "LICENSE_EXPIRED"
-            | "ACTIVATION_REVOKED"
-            | "DEVICE_MISMATCH"
-            | "INVALID_LICENSE_KEY"
-            | "UNAUTHORIZED_TOKEN"
-    )
-}
-
-fn map_error_code_to_user_message(code: &str, fallback_msg: &str) -> String {
-    match code {
-        "INVALID_LICENSE_KEY" => "Invalid License".to_string(),
-        "LICENSE_REVOKED" => "License Revoked".to_string(),
-        "LICENSE_SUSPENDED" => "License Suspended".to_string(),
-        "LICENSE_EXPIRED" => "License Expired".to_string(),
-        "ACTIVATION_REVOKED" => "Device Activation Revoked".to_string(),
-        "DEVICE_MISMATCH" => "Device Mismatch".to_string(),
-        "DEVICE_LIMIT_REACHED" => "Device Limit Reached".to_string(),
-        "CLOCK_SKEW_TOO_LARGE" => "System Clock Skew Too Large".to_string(),
-        "RATE_LIMITED" => "Too Many Attempts. Please try again later.".to_string(),
-        "UNAUTHORIZED_TOKEN" => "License Session Expired. Please reactivate.".to_string(),
-        "PRODUCT_MISMATCH" => "Product Mismatch".to_string(),
-        _ if !fallback_msg.trim().is_empty() => fallback_msg.trim().to_string(),
-        _ => "Unexpected Server Response".to_string(),
-    }
-}
-
-fn resolve_api_base_url() -> Result<String, String> {
-    let runtime_env = std::env::var("STOCKSTUDIO_LICENSE_API_URL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let compile_env = option_env!("STOCKSTUDIO_LICENSE_API_URL")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let raw = match runtime_env.or(compile_env) {
-        Some(url) => url,
-        None => {
-            #[cfg(debug_assertions)]
-            {
-                DEFAULT_DEV_API_BASE_URL.to_string()
-            }
-            #[cfg(not(debug_assertions))]
-            {
-                return Err("License API Not Configured".to_string());
-            }
-        }
-    };
-
-    validate_api_base_url(&raw)
-}
-
-fn validate_api_base_url(raw: &str) -> Result<String, String> {
-    let parsed = Url::parse(raw.trim()).map_err(|_| "Invalid License API URL".to_string())?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "Invalid License API URL".to_string())?
-        .to_ascii_lowercase();
-
-    let is_local_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
-    if parsed.scheme() == "https" {
-        // Never allow legacy Flowpilot host
-        if host.contains("flowpilot") {
-            return Err("Unsupported License API URL".to_string());
-        }
-    } else if parsed.scheme() == "http" && cfg!(debug_assertions) && is_local_loopback {
-        // Allowed only for local Wrangler dev in debug builds
-    } else {
-        return Err("License API requires HTTPS".to_string());
-    }
-
-    Ok(raw.trim().trim_end_matches('/').to_string())
-}
-
-fn resolve_verifying_keys() -> Vec<(Option<String>, String)> {
-    let mut keys: Vec<(Option<String>, String)> = Vec::new();
-
-    if let Ok(runtime_pk) = std::env::var("STOCKSTUDIO_LICENSE_PUBLIC_KEY_BASE64") {
-        let trimmed = runtime_pk.trim();
-        if !trimmed.is_empty() {
-            let kid = std::env::var("STOCKSTUDIO_LICENSE_SIGNING_KID")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            keys.push((kid, trimmed.to_string()));
-        }
-    }
-
-    if let Some(compile_pk) = option_env!("STOCKSTUDIO_LICENSE_PUBLIC_KEY_BASE64") {
-        let trimmed = compile_pk.trim();
-        if !trimmed.is_empty() {
-            let kid = option_env!("STOCKSTUDIO_LICENSE_SIGNING_KID")
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
-            keys.push((kid, trimmed.to_string()));
-        }
-    }
-
-    for &(kid, pub_b64) in EMBEDDED_VERIFYING_KEYS {
-        keys.push((Some(kid.to_string()), pub_b64.to_string()));
-    }
-
-    keys
-}
-
 fn default_client_config() -> Result<LicenseClientConfig, String> {
     Ok(LicenseClientConfig {
-        api_base_url: resolve_api_base_url()?,
+        api_base_url: resolve_api_base_url().map_err(|e| e.to_string())?,
         verifying_keys: resolve_verifying_keys(),
         http_timeout: Duration::from_secs(HTTP_TIMEOUT_SECONDS),
     })
@@ -407,30 +134,6 @@ fn state_file_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     app.path()
         .resolve("license-state.json", BaseDirectory::AppLocalData)
         .map_err(|e| e.to_string())
-}
-
-fn read_state_file(path: &Path) -> Result<Option<LicenseState>, String> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let parsed: LicenseState = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-    Ok(Some(parsed))
-}
-
-fn write_state_file(path: &Path, state: &LicenseState) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let bytes = serde_json::to_vec(state).map_err(|e| e.to_string())?;
-    fs::write(path, bytes).map_err(|e| e.to_string())
-}
-
-fn remove_state_file(path: &Path) -> Result<(), String> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 /// Reads the Windows MachineGuid from registry (`HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`)
@@ -471,30 +174,6 @@ fn read_machine_guid() -> String {
     format!("fallback-{host}-{}", std::env::consts::ARCH)
 }
 
-fn compute_device_fingerprint(machine_guid: &str, arch: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(format!("StockStudioPro:v1:device-fp:{machine_guid}:{arch}").as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(&mut hex, "{byte:02x}");
-    }
-    hex
-}
-
-fn sanitize_device_name() -> String {
-    let raw = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "StockStudio-Desktop".to_string());
-    let cleaned: String = raw.chars().filter(|c| !c.is_control()).take(120).collect();
-    if cleaned.trim().is_empty() {
-        "StockStudio-Desktop".to_string()
-    } else {
-        cleaned.trim().to_string()
-    }
-}
-
 fn current_platform() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
@@ -505,254 +184,26 @@ fn current_platform() -> &'static str {
     }
 }
 
-/// Dual-anchored device ID: stored persistently in Windows Credential Manager
-/// (`StockStudioPro / device-id`) and mirrored in `license-state.json`.
-fn ensure_device_id(secrets: &dyn SecretStore, state_path: &Path) -> Result<String, String> {
-    if let Ok(Some(existing)) = secrets.get_secret(KEYRING_DEVICE_ID) {
-        let trimmed = existing.trim();
-        if Uuid::parse_str(trimmed).is_ok() {
-            return Ok(trimmed.to_lowercase());
-        }
-    }
-
-    if let Ok(Some(saved)) = read_state_file(state_path) {
-        let trimmed = saved.device_id.trim();
-        if Uuid::parse_str(trimmed).is_ok() {
-            let normalized = trimmed.to_lowercase();
-            let _ = secrets.set_secret(KEYRING_DEVICE_ID, &normalized);
-            return Ok(normalized);
-        }
-    }
-
-    let id = Uuid::new_v4().to_string();
-    secrets.set_secret(KEYRING_DEVICE_ID, &id)?;
-    Ok(id)
-}
-
 fn resolve_device_identity(
     secrets: &dyn SecretStore,
     state_path: &Path,
 ) -> Result<DeviceIdentity, String> {
-    let device_id = ensure_device_id(secrets, state_path)?;
+    let device_id = ensure_device_id(secrets, state_path).map_err(|e| e.to_string())?;
     let arch = std::env::consts::ARCH;
     let machine_guid = read_machine_guid();
     let device_fingerprint = compute_device_fingerprint(&machine_guid, arch);
+    let raw_name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok();
 
     Ok(DeviceIdentity {
         device_id,
         device_fingerprint,
-        device_name: sanitize_device_name(),
+        device_name: sanitize_device_name(raw_name),
         platform: current_platform(),
         os_version: std::env::consts::OS.to_string(),
         arch,
     })
-}
-
-fn record_clock_anchor(secrets: &dyn SecretStore, observed_utc: DateTime<Utc>) {
-    let observed_ts = observed_utc.timestamp();
-    let current_anchor = read_clock_anchor(secrets).unwrap_or(0);
-    if observed_ts > current_anchor {
-        let _ = secrets.set_secret(KEYRING_CLOCK_ANCHOR, &observed_ts.to_string());
-    }
-}
-
-fn read_clock_anchor(secrets: &dyn SecretStore) -> Option<i64> {
-    secrets
-        .get_secret(KEYRING_CLOCK_ANCHOR)
-        .ok()
-        .flatten()
-        .and_then(|s| s.trim().parse::<i64>().ok())
-}
-
-/// Verifies an Ed25519 signed lease token (`v1.<base64url_payload>.<base64url_sig>`)
-/// strictly against the configured public verifying keys.
-/// NEVER accepts an unsigned or invalidly signed lease.
-fn verify_signed_lease_token(
-    lease_token: &str,
-    verifying_keys: &[(Option<String>, String)],
-    expected_device_id: &str,
-    expected_fingerprint: &str,
-) -> Result<SignedLeasePayload, String> {
-    if verifying_keys.is_empty() {
-        return Err("License Verification Key Not Configured".to_string());
-    }
-
-    let parts: Vec<&str> = lease_token.split('.').collect();
-    if parts.len() != 3 || parts[0] != "v1" {
-        return Err("Invalid License Lease Format".to_string());
-    }
-
-    let encoded_payload = parts[1];
-    let encoded_sig = parts[2];
-
-    let payload_bytes = BASE64_URL
-        .decode(encoded_payload)
-        .map_err(|_| "Invalid License Lease Payload".to_string())?;
-    let sig_bytes = BASE64_URL
-        .decode(encoded_sig)
-        .map_err(|_| "Invalid License Lease Signature".to_string())?;
-
-    let signature = Signature::from_slice(&sig_bytes)
-        .map_err(|_| "Invalid License Lease Signature".to_string())?;
-
-    let payload: SignedLeasePayload = serde_json::from_slice(&payload_bytes)
-        .map_err(|_| "Malformed License Lease Payload".to_string())?;
-
-    if payload.ver != 1 || payload.iss != EXPECTED_ISSUER || payload.aud != PRODUCT_ID {
-        return Err("Invalid License Lease Claims".to_string());
-    }
-
-    if payload.device_id.to_lowercase() != expected_device_id.to_lowercase()
-        || payload.device_fingerprint.to_lowercase() != expected_fingerprint.to_lowercase()
-    {
-        return Err("Device Mismatch".to_string());
-    }
-
-    let signing_input = format!("v1.{encoded_payload}");
-    let mut verified = false;
-
-    for (maybe_kid, pub_b64) in verifying_keys {
-        if let Some(kid) = maybe_kid {
-            if kid != &payload.kid {
-                continue;
-            }
-        }
-        let raw_key = match BASE64_STANDARD.decode(pub_b64.trim()) {
-            Ok(bytes) if bytes.len() == 32 => bytes,
-            _ => continue,
-        };
-        let key_array: [u8; 32] = match raw_key.try_into() {
-            Ok(arr) => arr,
-            Err(_) => continue,
-        };
-        let verifying_key = match VerifyingKey::from_bytes(&key_array) {
-            Ok(vk) => vk,
-            Err(_) => continue,
-        };
-        if verifying_key
-            .verify(signing_input.as_bytes(), &signature)
-            .is_ok()
-        {
-            verified = true;
-            break;
-        }
-    }
-
-    if !verified {
-        return Err("Invalid License Signature".to_string());
-    }
-
-    Ok(payload)
-}
-
-fn parse_rfc3339(ts: &str) -> Result<DateTime<Utc>, String> {
-    DateTime::parse_from_rfc3339(ts)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|_| "Invalid License Timestamp".to_string())
-}
-
-/// Evaluates an already-signed local lease for offline grace period (max 7 days)
-/// with 5-minute clock rollback tolerance.
-fn evaluate_offline_lease(
-    saved_state: &LicenseState,
-    verifying_keys: &[(Option<String>, String)],
-    identity: &DeviceIdentity,
-    secrets: &dyn SecretStore,
-    now_utc: DateTime<Utc>,
-) -> Result<LicenseState, String> {
-    if saved_state.lease_token.trim().is_empty() {
-        return Err("Offline Grace Unavailable".to_string());
-    }
-
-    let lease = verify_signed_lease_token(
-        &saved_state.lease_token,
-        verifying_keys,
-        &identity.device_id,
-        &identity.device_fingerprint,
-    )?;
-
-    if lease.status != "active" && lease.status != "past_due" {
-        return Err(map_error_code_to_user_message(
-            &lease.status,
-            "License Inactive",
-        ));
-    }
-
-    let issued_at = parse_rfc3339(&lease.iat)?;
-    let lease_exp = parse_rfc3339(&lease.exp)?;
-    let now_ts = now_utc.timestamp();
-
-    // Clock rollback check against lease.iat (5-minute tolerance)
-    if now_ts + CLOCK_ROLLBACK_TOLERANCE_SECONDS < issued_at.timestamp() {
-        return Err("System Clock Rollback Detected".to_string());
-    }
-
-    // Clock rollback check against Credential Manager clock-anchor (5-minute tolerance)
-    if let Some(anchor_ts) = read_clock_anchor(secrets) {
-        if now_ts + CLOCK_ROLLBACK_TOLERANCE_SECONDS < anchor_ts {
-            return Err("System Clock Rollback Detected".to_string());
-        }
-    }
-
-    // Enforce hard 7-day ceiling on offline grace period regardless of lease claim
-    let max_allowed_exp = issued_at.timestamp() + OFFLINE_GRACE_MAX_SECONDS;
-    let effective_exp = lease_exp.timestamp().min(max_allowed_exp);
-    if now_ts > effective_exp {
-        return Err("Offline Grace Period Expired".to_string());
-    }
-
-    // For subscription licenses, never exceed expires_at
-    if lease.license_type == "subscription" {
-        if let Some(exp_str) = &lease.expires_at {
-            let sub_exp = parse_rfc3339(exp_str)?;
-            if now_ts >= sub_exp.timestamp() {
-                return Err("License Expired".to_string());
-            }
-        }
-    }
-
-    record_clock_anchor(secrets, now_utc);
-
-    Ok(lease_to_license_state(
-        &lease,
-        &saved_state.key_prefix,
-        &saved_state.lease_token,
-        true,
-    ))
-}
-
-fn lease_to_license_state(
-    lease: &SignedLeasePayload,
-    key_prefix: &str,
-    lease_token: &str,
-    is_offline_grace: bool,
-) -> LicenseState {
-    LicenseState {
-        plan: if !lease.plan_name.is_empty() {
-            lease.plan_name.clone()
-        } else {
-            lease.plan_code.clone()
-        },
-        status: lease.status.clone(),
-        expires_at: lease.expires_at.clone(),
-        lifetime: lease.lifetime || lease.license_type == "perpetual",
-        last_validated_at: lease.iat.clone(),
-        device_id: lease.device_id.clone(),
-        license_id: lease.license_id.clone(),
-        activation_id: lease.activation_id.clone(),
-        key_prefix: key_prefix.to_string(),
-        license_type: lease.license_type.clone(),
-        billing_interval: lease.billing_interval.clone(),
-        current_period_start: lease.current_period_start.clone(),
-        current_period_end: lease.current_period_end.clone(),
-        cancel_at_period_end: lease.cancel_at_period_end,
-        device_limit: lease.device_limit,
-        devices_used: lease.devices_used,
-        offline_grace_until: lease.offline_grace_until.clone(),
-        is_offline_grace,
-        entitlements: lease.entitlements.clone(),
-        lease_token: lease_token.to_string(),
-    }
 }
 
 fn build_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -805,15 +256,6 @@ async fn parse_error_response(response: reqwest::Response) -> ApiCallFailure {
         code: format!("HTTP_{}", status.as_u16()),
         message: "Unexpected Server Response".to_string(),
     }
-}
-
-fn clear_license_credentials_preserving_device_id(
-    secrets: &dyn SecretStore,
-    state_path: &Path,
-) -> Result<(), String> {
-    let _ = secrets.delete_secret(KEYRING_ACTIVATION_TOKEN);
-    let _ = secrets.delete_secret(KEYRING_LICENSE_KEY);
-    remove_state_file(state_path)
 }
 
 async fn activate_license_internal(
@@ -873,7 +315,8 @@ async fn activate_license_internal(
         &config.verifying_keys,
         &identity.device_id,
         &identity.device_fingerprint,
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
 
     secrets.set_secret(KEYRING_LICENSE_KEY, &trimmed_key)?;
     secrets.set_secret(KEYRING_ACTIVATION_TOKEN, &payload.activation_token)?;
@@ -888,7 +331,7 @@ async fn activate_license_internal(
         &payload.lease_token,
         false,
     );
-    write_state_file(state_path, &new_state)?;
+    write_state_file_atomic(state_path, &new_state).map_err(|e| e.to_string())?;
     Ok(new_state)
 }
 
@@ -899,7 +342,7 @@ async fn validate_license_internal(
     now_utc: DateTime<Utc>,
 ) -> Result<LicenseState, String> {
     let identity = resolve_device_identity(secrets, state_path)?;
-    let saved_state = read_state_file(state_path)?;
+    let saved_state = read_state_file(state_path).ok().flatten();
     let activation_token = secrets.get_secret(KEYRING_ACTIVATION_TOKEN)?;
 
     let Some(token) = activation_token.filter(|t| !t.trim().is_empty()) else {
@@ -943,7 +386,8 @@ async fn validate_license_internal(
                 &config.verifying_keys,
                 &identity.device_id,
                 &identity.device_fingerprint,
-            )?;
+            )
+            .map_err(|e| e.to_string())?;
 
             record_clock_anchor(secrets, now_utc);
             if let Ok(server_iat) = parse_rfc3339(&verified_lease.iat) {
@@ -956,12 +400,11 @@ async fn validate_license_internal(
                 &payload.lease_token,
                 false,
             );
-            write_state_file(state_path, &new_state)?;
+            write_state_file_atomic(state_path, &new_state).map_err(|e| e.to_string())?;
             Ok(new_state)
         }
         Ok(response) => match parse_error_response(response).await {
             ApiCallFailure::Terminal { message, .. } => {
-                // Server authoritatively rejected license/activation -> revoke local cache immediately
                 let _ = clear_license_credentials_preserving_device_id(secrets, state_path);
                 Err(message)
             }
@@ -974,13 +417,13 @@ async fn validate_license_internal(
                         &identity,
                         secrets,
                         now_utc,
-                    );
+                    )
+                    .map_err(|e| e.to_string());
                 }
                 Err(transient_msg)
             }
         },
         Err(_) => {
-            // Network timeout / offline -> evaluate signed Ed25519 offline grace lease
             if let Some(local) = saved_state.as_ref() {
                 return evaluate_offline_lease(
                     local,
@@ -988,7 +431,8 @@ async fn validate_license_internal(
                     &identity,
                     secrets,
                     now_utc,
-                );
+                )
+                .map_err(|e| e.to_string());
             }
             Err("Server Unavailable".to_string())
         }
@@ -1005,7 +449,7 @@ async fn deactivate_license_internal(
     now_utc: DateTime<Utc>,
 ) -> Result<DeactivateLicenseResponse, String> {
     let identity = resolve_device_identity(secrets, state_path)?;
-    let saved_state = read_state_file(state_path)?;
+    let saved_state = read_state_file(state_path).ok().flatten();
     let activation_token = secrets.get_secret(KEYRING_ACTIVATION_TOKEN)?;
     let saved_license_key = secrets.get_secret(KEYRING_LICENSE_KEY)?;
 
@@ -1082,7 +526,6 @@ async fn deactivate_license_internal(
         return Err("Unexpected Server Response".to_string());
     }
 
-    // If we deactivated the current device's activation, clear local license credentials while preserving device_id
     let current_activation_id = saved_state.as_ref().map(|s| s.activation_id.as_str());
     if target_activation_id.is_none()
         || current_activation_id == Some(parsed.deactivated_activation_id.as_str())
@@ -1175,7 +618,7 @@ fn get_verified_license_state_internal(
     secrets: &dyn SecretStore,
     state_path: &Path,
 ) -> Result<Option<LicenseState>, String> {
-    let Some(saved) = read_state_file(state_path)? else {
+    let Some(saved) = read_state_file(state_path).ok().flatten() else {
         return Ok(None);
     };
     if saved.lease_token.trim().is_empty() {
@@ -1199,13 +642,13 @@ fn get_verified_license_state_internal(
 }
 
 // =============================================================================
-// Public Tauri IPC Commands (5 preserved + 2 added)
+// Public Tauri IPC Commands (Preserved 100% Backward-Compatible)
 // =============================================================================
 
 #[tauri::command]
 pub fn get_device_id<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     let path = state_file_path(&app)?;
-    ensure_device_id(&KeyringSecretStore, &path)
+    ensure_device_id(&KeyringSecretStore, &path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1275,19 +718,29 @@ pub async fn list_license_devices<R: Runtime>(
 pub fn clear_license_state<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let path = state_file_path(&app)?;
     clear_license_credentials_preserving_device_id(&KeyringSecretStore, &path)
+        .map_err(|e| e.to_string())
 }
 
 // =============================================================================
-// Unit & Mock-HTTP Integration Tests
+// Unit & Mock-HTTP Integration Tests (Preserved from Desktop Baseline)
 // =============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::{
+        STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL,
+    };
+    use base64::Engine;
     use chrono::TimeZone;
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use std::collections::HashMap;
+    use std::fs;
     use std::sync::{Arc, Mutex};
+    use stockstudio_license_core::{
+        resolve_api_base_url_for_mode, resolve_verifying_keys_for_mode, validate_api_base_url,
+        LicenseCoreError, EXPECTED_ISSUER, KEYRING_DEVICE_ID,
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -1324,7 +777,6 @@ mod tests {
     }
 
     fn make_test_signing_key() -> (SigningKey, String) {
-        // Deterministic test-only seed (never used in production)
         let seed: [u8; 32] = [42u8; 32];
         let signing_key = SigningKey::from_bytes(&seed);
         let pub_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().as_bytes());
@@ -1477,7 +929,6 @@ mod tests {
             Some("ssact_test_token_123")
         );
 
-        // Verified local read works and preserves legacy LicenseState fields
         let read_back =
             get_verified_license_state_internal(&config.verifying_keys, &secrets, &state_path)
                 .unwrap()
@@ -1599,7 +1050,6 @@ mod tests {
         let identity = resolve_device_identity(&secrets, &state_path).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 11, 20, 16, 0, 0).unwrap();
 
-        // Seed active token & state
         let lease_json = sample_lease_json(
             &identity,
             "perpetual",
@@ -1613,7 +1063,7 @@ mod tests {
         secrets
             .set_secret(KEYRING_ACTIVATION_TOKEN, "ssact_active_token")
             .unwrap();
-        write_state_file(
+        write_state_file_atomic(
             &state_path,
             &LicenseState {
                 activation_id: "act_01TEST00000000000000000000".to_string(),
@@ -1685,7 +1135,6 @@ mod tests {
         .await
         .expect("deactivation must succeed");
         assert_eq!(deact.devices_used, 0);
-        // Local credentials cleared, but device-id MUST still be preserved in Credential Manager
         assert!(secrets
             .get_secret(KEYRING_ACTIVATION_TOKEN)
             .unwrap()
@@ -1715,7 +1164,6 @@ mod tests {
         );
         let valid_token = sign_test_lease_json(&signing_key, &lease_json);
 
-        // 1. Valid offline grace 3 days after issue
         let saved = LicenseState {
             key_prefix: "SSPRO-7K9M".to_string(),
             device_id: identity.device_id.clone(),
@@ -1728,7 +1176,6 @@ mod tests {
         assert!(grace_ok.is_offline_grace);
         assert_eq!(grace_ok.status, "active");
 
-        // 2. Tampered signature must fail
         let parts: Vec<&str> = valid_token.split('.').collect();
         let tampered_payload = BASE64_URL.encode(
             serde_json::to_vec(&serde_json::json!({
@@ -1742,20 +1189,21 @@ mod tests {
         };
         let sig_err =
             evaluate_offline_lease(&tampered_state, &verifying_keys, &identity, &secrets, day3)
-                .expect_err("tampered lease must be rejected");
+                .expect_err("tampered lease must be rejected")
+                .to_string();
         assert!(sig_err.contains("Malformed") || sig_err.contains("Invalid"));
 
-        // 3. Clock rollback (> 5 minutes earlier than observed day3 anchor) must fail
         let rolled_back = Utc.with_ymd_and_hms(2026, 11, 22, 16, 0, 0).unwrap();
         let rollback_err =
             evaluate_offline_lease(&saved, &verifying_keys, &identity, &secrets, rolled_back)
-                .expect_err("clock rollback must be rejected");
+                .expect_err("clock rollback must be rejected")
+                .to_string();
         assert_eq!(rollback_err, "System Clock Rollback Detected");
 
-        // 4. Lease expired (8 days after issue) must fail
         let day8 = Utc.with_ymd_and_hms(2026, 11, 28, 16, 0, 1).unwrap();
         let exp_err = evaluate_offline_lease(&saved, &verifying_keys, &identity, &secrets, day8)
-            .expect_err("expired offline lease must be rejected");
+            .expect_err("expired offline lease must be rejected")
+            .to_string();
         assert_eq!(exp_err, "Offline Grace Period Expired");
     }
 
@@ -1779,7 +1227,7 @@ mod tests {
         secrets
             .set_secret(KEYRING_ACTIVATION_TOKEN, "ssact_valid_token")
             .unwrap();
-        write_state_file(
+        write_state_file_atomic(
             &state_path,
             &LicenseState {
                 activation_id: "act_01TEST00000000000000000000".to_string(),
@@ -1793,7 +1241,6 @@ mod tests {
 
         let day2 = Utc.with_ymd_and_hms(2026, 11, 22, 16, 0, 0).unwrap();
 
-        // 1. Server 503 -> falls back to valid offline grace lease
         let base_503 = spawn_mock_http_server(
             vec![(
                 503,
@@ -1813,7 +1260,6 @@ mod tests {
             .expect("503 should use offline grace period");
         assert!(state_503.is_offline_grace);
 
-        // 2. Network timeout -> falls back to valid offline grace lease
         let base_timeout = spawn_mock_http_server(vec![(200, "{}".to_string())], 400).await;
         let cfg_timeout = LicenseClientConfig {
             api_base_url: base_timeout,
@@ -1825,7 +1271,6 @@ mod tests {
             .expect("timeout should use offline grace period");
         assert!(state_timeout.is_offline_grace);
 
-        // 3. Authoritative 403 LICENSE_REVOKED -> MUST NOT use offline grace and MUST clear local cache
         let base_revoked = spawn_mock_http_server(
             vec![(
                 403,
@@ -1863,5 +1308,48 @@ mod tests {
             validate_api_base_url("https://flowpilot-license-server.frangga-snow.workers.dev")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn isolates_development_staging_defaults_from_production_builds() {
+        assert_eq!(
+            resolve_api_base_url_for_mode(None, None, false),
+            Err(LicenseCoreError::ApiNotConfigured)
+        );
+        let prod_keys = resolve_verifying_keys_for_mode(None, None, false);
+        assert!(
+            !prod_keys
+                .iter()
+                .any(|(kid, _)| kid.as_deref() == Some("sspro-ed25519-staging-01")),
+            "production builds must never inherit staging verifying keys"
+        );
+
+        let dev_url = resolve_api_base_url_for_mode(None, None, true)
+            .expect("dev mode should resolve staging API URL");
+        assert_eq!(
+            dev_url,
+            "https://stockstudio-pro-license-api-staging.dekadk00.workers.dev"
+        );
+        let dev_keys = resolve_verifying_keys_for_mode(None, None, true);
+        let staging_entry = dev_keys
+            .iter()
+            .find(|(kid, _)| kid.as_deref() == Some("sspro-ed25519-staging-01"))
+            .expect("dev mode should embed staging public verifying key");
+        let decoded = BASE64_STANDARD
+            .decode(staging_entry.1.trim())
+            .expect("embedded staging public key must be valid base64");
+        assert_eq!(decoded.len(), 32, "Ed25519 verifying key must be 32 bytes");
+        assert!(
+            VerifyingKey::from_bytes(&decoded.try_into().unwrap()).is_ok(),
+            "embedded staging public key must be a valid Ed25519 verifying key"
+        );
+
+        let override_url = resolve_api_base_url_for_mode(
+            Some("https://license.stockstudiopro.example".to_string()),
+            None,
+            false,
+        )
+        .expect("explicit HTTPS URL should be accepted");
+        assert_eq!(override_url, "https://license.stockstudiopro.example");
     }
 }

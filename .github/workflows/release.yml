@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+env:
+  STOCKSTUDIO_LICENSE_API_URL: ${{ vars.STOCKSTUDIO_LICENSE_API_URL || 'https://stockstudio-pro-license-api-prod.dekadk00.workers.dev' }}
+  STOCKSTUDIO_EXTENSION_ID: ${{ vars.STOCKSTUDIO_EXTENSION_ID || 'ejcjoljemplfeenipjehlhhclbkpialk' }}
+
 jobs:
   release:
     runs-on: windows-latest
@@ -26,9 +30,94 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
-      - name: Install dependencies
+      - name: Install Desktop dependencies
         run: npm ci
+
+      - name: Install Worker API dependencies
+        run: npm --prefix workers/license-api ci
+
+      - name: Gate 1 - Validate production release configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:STOCKSTUDIO_LICENSE_API_URL -notmatch '^https://') {
+            throw "STOCKSTUDIO_LICENSE_API_URL must use HTTPS."
+          }
+          if ($env:STOCKSTUDIO_LICENSE_API_URL -match 'staging|flowpilot|localhost|127\.0\.0\.1') {
+            throw "STOCKSTUDIO_LICENSE_API_URL must not target staging, flowpilot, or localhost."
+          }
+          if ($env:STOCKSTUDIO_EXTENSION_ID -notmatch '^[a-p]{32}$') {
+            throw "STOCKSTUDIO_EXTENSION_ID must be an exact 32-character Chrome Extension ID."
+          }
+          $cfg = Get-Content -Raw "src-tauri/crates/stockstudio-license-core/src/config.rs"
+          if ($cfg -notmatch 'sspro-ed25519-prod-01' -or $cfg -notmatch 'uy1Hyu3NEm9K1SLIdh2P7CEckfAjKBC8/Cn334jygjc=') {
+            throw "EMBEDDED_PROD_VERIFYING_KEYS in config.rs is missing the verified production Ed25519 key."
+          }
+          Write-Output "Production configuration gate passed."
+
+      - name: Gate 2 - Frontend typecheck and build
+        run: |
+          npm run typecheck
+          npm run build
+
+      - name: Gate 3 - Rust format and workspace tests (debug + release prod-key verification)
+        run: |
+          cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path src-tauri/Cargo.toml --workspace
+          cargo test --release --manifest-path src-tauri/Cargo.toml -p stockstudio-license-core
+
+      - name: Gate 4 - Worker API typecheck and test suite
+        run: |
+          npm --prefix workers/license-api run typecheck
+          npm --prefix workers/license-api test
+
+      - name: Gate 5 - Prepare static-CRT NMH & Chrome Extension build/license client tests
+        shell: pwsh
+        env:
+          STOCKSTUDIO_EXTENSION_DIR: ${{ vars.STOCKSTUDIO_EXTENSION_DIR || 'chrome-extension/vectorize-ai-download' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          node scripts/prepare-nmh-bundle.mjs
+          if (-not (Test-Path $env:STOCKSTUDIO_EXTENSION_DIR)) {
+            throw "Chrome Extension directory not found at '$($env:STOCKSTUDIO_EXTENSION_DIR)'. Configure vars.STOCKSTUDIO_EXTENSION_DIR or include the extension in CI checkout."
+          }
+          $null = Get-Content -Raw (Join-Path $env:STOCKSTUDIO_EXTENSION_DIR "manifest.json") | ConvertFrom-Json
+          foreach ($rel in @(
+            "background/license-client.js",
+            "background/service-worker.js",
+            "content/content.js",
+            "injected/inject.js",
+            "popup/popup.js"
+          )) {
+            node --check (Join-Path $env:STOCKSTUDIO_EXTENSION_DIR $rel)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          node scripts/test-extension-license-client.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Gate 6 - Unified Licensing E2E test
+        env:
+          STOCKSTUDIO_EXTENSION_DIR: ${{ vars.STOCKSTUDIO_EXTENSION_DIR || 'chrome-extension/vectorize-ai-download' }}
+        run: node scripts/test-e2e-unified-licensing.mjs
+
+      - name: Gate 7 - Verify updater migration and signing secrets before publish
+        shell: pwsh
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_SIGNING_PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tauriConf = Get-Content -Raw "src-tauri/tauri.conf.json"
+          if ($tauriConf -match 'masplangga/flowpilot') {
+            throw "Release blocked: src-tauri/tauri.conf.json updater endpoint still points to legacy masplangga/flowpilot. Complete updater migration first."
+          }
+          if ($env:HAS_SIGNING_KEY -ne 'true' -or $env:HAS_SIGNING_PASS -ne 'true') {
+            throw "Release blocked: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD secrets must both be configured."
+          }
+          Write-Output "Updater readiness guard passed."
 
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0.6
@@ -36,6 +125,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          STOCKSTUDIO_LICENSE_API_URL: ${{ env.STOCKSTUDIO_LICENSE_API_URL }}
+          STOCKSTUDIO_EXTENSION_ID: ${{ env.STOCKSTUDIO_EXTENSION_ID }}
         with:
           tagName: ${{ inputs.tag }}
           releaseName: StockStudio Pro ${{ inputs.tag }}

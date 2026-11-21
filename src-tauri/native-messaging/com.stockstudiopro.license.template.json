@@ -1,0 +1,9 @@
+{
+  "name": "com.stockstudiopro.license",
+  "description": "StockStudio Pro Unified License Verification Host",
+  "path": "__STOCKSTUDIO_NMH_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__STOCKSTUDIO_EXTENSION_ID_PLACEHOLDER__/"
+  ]
+}
