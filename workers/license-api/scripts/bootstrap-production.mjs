@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // =============================================================================
 // StockStudio Pro License API — Guarded Production Secrets & D1 Bootstrap Script
 //
