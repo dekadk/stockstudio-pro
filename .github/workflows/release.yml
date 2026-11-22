@@ -131,6 +131,6 @@ jobs:
           tagName: ${{ inputs.tag }}
           releaseName: StockStudio Pro ${{ inputs.tag }}
           releaseBody: Signed StockStudio Pro release.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
