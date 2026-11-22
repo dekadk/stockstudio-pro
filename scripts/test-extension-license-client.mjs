@@ -238,8 +238,14 @@ async function runTests() {
   assert.equal(vMalformed.error_code, "MALFORMED_RESPONSE")
   console.log("PASS 6: Malformed response & request_id mismatch rejected")
 
-  // 7. Live framed stdin/stdout round-trip against compiled stockstudio-nmh.exe (Desktop not running)
-  const nmhExe = path.resolve("src-tauri", "target", "release", "stockstudio-nmh.exe")
+  // 7. Live framed stdin/stdout round-trip against verified staged static-CRT stockstudio-nmh.exe (Desktop not running)
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64"
+  const nmhExe = path.join(
+    REPO_ROOT,
+    "src-tauri",
+    "binaries",
+    `stockstudio-nmh-${arch}-pc-windows-msvc.exe`
+  )
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "sspro-ext-nmh-"))
   const missingStatePath = path.join(tmpDir, "license-state.json")
   const reqPayload = JSON.stringify({

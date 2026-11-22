@@ -61,6 +61,9 @@ jobs:
           npm run typecheck
           npm run build
 
+      - name: Stage static-CRT NMH binary for Tauri resource validation
+        run: node scripts/prepare-nmh-bundle.mjs
+
       - name: Gate 3 - Rust format and workspace tests (debug + release prod-key verification)
         run: |
           cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check
