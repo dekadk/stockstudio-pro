@@ -24,9 +24,10 @@ import { fileURLToPath } from "node:url"
 
 const require = createRequire(import.meta.url)
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const EXT_DIR =
-  process.env.STOCKSTUDIO_EXTENSION_DIR?.trim() ||
-  path.join(REPO_ROOT, "chrome-extension", "vectorize-ai-download")
+const rawExtDir = process.env.STOCKSTUDIO_EXTENSION_DIR?.trim()
+const EXT_DIR = rawExtDir
+  ? path.resolve(REPO_ROOT, rawExtDir)
+  : path.join(REPO_ROOT, "chrome-extension", "vectorize-ai-download")
 const EXPECTED_EXTENSION_ID = "ejcjoljemplfeenipjehlhhclbkpialk"
 
 const licenseClient = require(path.join(EXT_DIR, "background", "license-client.js"))

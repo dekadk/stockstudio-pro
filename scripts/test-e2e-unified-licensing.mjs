@@ -18,9 +18,10 @@ import path from "node:path"
 
 const require = createRequire(import.meta.url)
 const REPO_ROOT = process.cwd()
-const EXT_DIR =
-  process.env.STOCKSTUDIO_EXTENSION_DIR?.trim() ||
-  path.join(REPO_ROOT, "chrome-extension", "vectorize-ai-download")
+const rawExtDir = process.env.STOCKSTUDIO_EXTENSION_DIR?.trim()
+const EXT_DIR = rawExtDir
+  ? path.resolve(REPO_ROOT, rawExtDir)
+  : path.join(REPO_ROOT, "chrome-extension", "vectorize-ai-download")
 const PINNED_EXT_ID = "ejcjoljemplfeenipjehlhhclbkpialk"
 const NMH_EXE = path.join(REPO_ROOT, "src-tauri", "binaries", "stockstudio-nmh-x86_64-pc-windows-msvc.exe")
 
