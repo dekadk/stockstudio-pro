@@ -1,0 +1,15 @@
+# =============================================================================
+# StockStudio Pro — Production Cloudflare Pages Gateway (G-G3.4D)
+#
+# Transparently forwards public HTTPS requests via Service Binding to the
+# existing production License Worker (`stockstudio-pro-license-api-prod`).
+# Holds ZERO secrets, ZERO signing keys, ZERO D1 bindings, and ZERO staging refs.
+# =============================================================================
+
+name = "stockstudio-pro-license-production"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "./public"
+
+[[services]]
+binding = "LICENSE_API"
+service = "stockstudio-pro-license-api-prod"
