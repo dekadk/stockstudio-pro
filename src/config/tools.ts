@@ -10,6 +10,24 @@ export type ToolLaunchMode = "google-flow-webview" | "external-browser"
 
 export type StudioToolId = string
 
+export type StudioToolIconId =
+  | "background"
+  | "mascot"
+  | "pattern"
+  | "tag"
+  | "sparkles"
+  | "wand"
+  | "palette"
+  | "layers"
+  | "camera"
+  | "video"
+  | "type"
+  | "grid"
+  | "bot"
+  | "rocket"
+  | "folder"
+  | "wrench"
+
 export interface StudioToolDefinition {
   id: StudioToolId
   name: string
@@ -18,6 +36,7 @@ export interface StudioToolDefinition {
   url: string
   launchMode: ToolLaunchMode
   badge: string
+  icon?: StudioToolIconId
   enabled?: boolean
   sortOrder?: number
 }
@@ -29,6 +48,7 @@ export interface RemoteStudioToolPayload {
   description: string
   url: string
   badge: string
+  icon?: string
   enabled?: boolean
   sort_order?: number
 }
@@ -85,22 +105,57 @@ export const MASCOT_TOOL: StudioToolDefinition = STUDIO_TOOLS[1]
 export const PATTERN_TOOL: StudioToolDefinition = STUDIO_TOOLS[2]
 export const AIO_METADATA_TOOL: StudioToolDefinition = STUDIO_TOOLS[3]
 
+const VALID_TOOL_ICONS = new Set<StudioToolIconId>([
+  "background",
+  "mascot",
+  "pattern",
+  "tag",
+  "sparkles",
+  "wand",
+  "palette",
+  "layers",
+  "camera",
+  "video",
+  "type",
+  "grid",
+  "bot",
+  "rocket",
+  "folder",
+  "wrench",
+])
+
+function resolveToolIcon(id: string, badge: string, rawIcon?: string): StudioToolIconId {
+  const normalized = (rawIcon || "").trim().toLowerCase() as StudioToolIconId
+  if (VALID_TOOL_ICONS.has(normalized)) return normalized
+  if (id === "background") return "background"
+  if (id === "mascot") return "mascot"
+  if (id === "pattern") return "pattern"
+  if (id === "aio-metadata") return "tag"
+  if (badge === "GEMINI") return "sparkles"
+  return "wand"
+}
+
 export function normalizeRemoteStudioTools(
   remote: RemoteStudioToolPayload[]
 ): StudioToolDefinition[] {
   return remote
     .filter((item) => item && item.enabled !== false && Boolean(item.id?.trim()) && Boolean(item.url?.trim()))
-    .map((item) => ({
-      id: item.id.trim().toLowerCase(),
-      name: item.name.trim(),
-      category: item.category?.trim() || "Studio Tool",
-      description: item.description?.trim() || "",
-      url: item.url.trim(),
-      launchMode: "google-flow-webview" as const,
-      badge: (item.badge?.trim() || "FLOW").toUpperCase(),
-      enabled: true,
-      sortOrder: typeof item.sort_order === "number" ? item.sort_order : 100,
-    }))
+    .map((item) => {
+      const id = item.id.trim().toLowerCase()
+      const badge = (item.badge?.trim() || "FLOW").toUpperCase()
+      return {
+        id,
+        name: item.name.trim(),
+        category: item.category?.trim() || "Studio Tool",
+        description: item.description?.trim() || "",
+        url: item.url.trim(),
+        launchMode: "google-flow-webview" as const,
+        badge,
+        icon: resolveToolIcon(id, badge, item.icon),
+        enabled: true,
+        sortOrder: typeof item.sort_order === "number" ? item.sort_order : 100,
+      }
+    })
     .sort((a, b) => (a.sortOrder ?? 100) - (b.sortOrder ?? 100))
 }
 

@@ -722,10 +722,16 @@ pub struct StudioToolRemote {
     pub description: String,
     pub url: String,
     pub badge: String,
+    #[serde(default = "default_tool_icon")]
+    pub icon: String,
     #[serde(default = "default_tool_enabled")]
     pub enabled: bool,
     #[serde(default)]
     pub sort_order: i64,
+}
+
+fn default_tool_icon() -> String {
+    "sparkles".to_string()
 }
 
 fn default_tool_enabled() -> bool {

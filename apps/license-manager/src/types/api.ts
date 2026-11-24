@@ -285,6 +285,7 @@ export interface StudioToolItem {
   description: string;
   url: string;
   badge: string;
+  icon: string;
   enabled: boolean;
   sort_order: number;
   created_at: string;
@@ -318,6 +319,7 @@ export interface CreateStudioToolCommandInput {
     description?: string;
     url: string;
     badge?: string;
+    icon?: string;
     enabled?: boolean;
     sort_order?: number;
   };
@@ -332,6 +334,7 @@ export interface UpdateStudioToolCommandInput {
     description?: string;
     url?: string;
     badge?: string;
+    icon?: string;
     enabled?: boolean;
     sort_order?: number;
   };

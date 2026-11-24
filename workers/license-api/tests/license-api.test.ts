@@ -34,6 +34,10 @@ const migration0003Sql = readFileSync(
   resolve(__dirname, "..", "migrations", "0003_studio_tools.sql"),
   "utf8"
 );
+const migration0004Sql = readFileSync(
+  resolve(__dirname, "..", "migrations", "0004_studio_tools_icon.sql"),
+  "utf8"
+);
 
 function splitSqlStatements(sql: string): string[] {
   const withoutComments = sql
@@ -143,8 +147,8 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
 
     db = await mf.getD1Database("DB");
 
-    // Apply all SQL statements from migrations 0001, 0002, and 0003
-    for (const sql of [migrationSql, migration0002Sql, migration0003Sql]) {
+    // Apply all SQL statements from migrations 0001, 0002, 0003, and 0004
+    for (const sql of [migrationSql, migration0002Sql, migration0003Sql, migration0004Sql]) {
       for (const stmt of splitSqlStatements(sql)) {
         await db.prepare(stmt).run();
       }
@@ -2012,7 +2016,7 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
     expect(activated.status).toBe(200);
     const clientToken = activated.body.activation_token as string;
 
-    // Create a new Gemini Canvas tool
+    // Create a new Gemini Canvas tool with custom icon
     const created = await callApi("/v1/admin/tools", {
       method: "POST",
       headers: adminHeaders(superAdminToken),
@@ -2020,11 +2024,13 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
         name: "Prompt Helper",
         url: "https://share.gemini.google/NewPromptTool123",
         description: "Generate microstock prompts quickly.",
+        icon: "wand",
       }),
     });
     expect(created.status).toBe(201);
     expect(created.body.tool.id).toBe("prompt-helper");
     expect(created.body.tool.badge).toBe("GEMINI");
+    expect(created.body.tool.icon).toBe("wand");
     expect(created.body.tool.enabled).toBe(true);
 
     // Reject disallowed domain & HTTP URL

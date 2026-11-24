@@ -26,6 +26,25 @@ const ALLOWED_TOOL_HOSTS: readonly string[] = [
   "g.co",
 ];
 
+const ALLOWED_TOOL_ICONS = new Set([
+  "background",
+  "mascot",
+  "pattern",
+  "tag",
+  "sparkles",
+  "wand",
+  "palette",
+  "layers",
+  "camera",
+  "video",
+  "type",
+  "grid",
+  "bot",
+  "rocket",
+  "folder",
+  "wrench",
+]);
+
 export interface StudioToolDto {
   id: string;
   name: string;
@@ -33,10 +52,24 @@ export interface StudioToolDto {
   description: string;
   url: string;
   badge: string;
+  icon: string;
   enabled: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
+}
+
+function normalizeToolIcon(raw: unknown, fallback = "sparkles"): string {
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (!ALLOWED_TOOL_ICONS.has(normalized)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Unsupported tool icon '${normalized}'.`,
+    });
+  }
+  return normalized;
 }
 
 function formatStudioTool(row: StudioToolRow): StudioToolDto {
@@ -47,6 +80,7 @@ function formatStudioTool(row: StudioToolRow): StudioToolDto {
     description: row.description,
     url: row.url,
     badge: row.badge,
+    icon: row.icon && ALLOWED_TOOL_ICONS.has(row.icon) ? row.icon : "sparkles",
     enabled: row.enabled === 1,
     sort_order: row.sort_order,
     created_at: row.created_at,
@@ -340,6 +374,7 @@ export async function handleAdminCreateTool(
     description?: unknown;
     url?: unknown;
     badge?: unknown;
+    icon?: unknown;
     enabled?: unknown;
     sort_order?: unknown;
   }>(request);
@@ -354,6 +389,10 @@ export async function handleAdminCreateTool(
   const badge = (
     validateStringField(body.badge, "Badge", 16, false) || deriveDefaultBadge(host)
   ).toUpperCase();
+  const icon = normalizeToolIcon(
+    body.icon,
+    deriveDefaultBadge(host) === "GEMINI" ? "sparkles" : "wand"
+  );
   const enabled = body.enabled === undefined ? true : Boolean(body.enabled);
 
   let sortOrder: number;
@@ -379,8 +418,8 @@ export async function handleAdminCreateTool(
 
   await env.DB.prepare(
     `INSERT INTO studio_tools (
-       id, name, category, description, url, badge, enabled, sort_order, created_at, updated_at
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`
+       id, name, category, description, url, badge, icon, enabled, sort_order, created_at, updated_at
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)`
   )
     .bind(
       id,
@@ -389,6 +428,7 @@ export async function handleAdminCreateTool(
       description,
       url,
       badge,
+      icon,
       enabled ? 1 : 0,
       sortOrder,
       ctx.nowIso
@@ -440,6 +480,7 @@ export async function handleAdminUpdateTool(
     description?: unknown;
     url?: unknown;
     badge?: unknown;
+    icon?: unknown;
     enabled?: unknown;
     sort_order?: unknown;
   }>(request);
@@ -462,6 +503,10 @@ export async function handleAdminUpdateTool(
     body.badge !== undefined
       ? validateStringField(body.badge, "Badge", 16, true).toUpperCase()
       : existing.badge;
+  const icon =
+    body.icon !== undefined
+      ? normalizeToolIcon(body.icon, existing.icon || "sparkles")
+      : existing.icon || "sparkles";
   const enabled =
     body.enabled !== undefined ? (Boolean(body.enabled) ? 1 : 0) : existing.enabled;
   const sortOrder =
@@ -478,9 +523,10 @@ export async function handleAdminUpdateTool(
            description = ?4,
            url = ?5,
            badge = ?6,
-           enabled = ?7,
-           sort_order = ?8,
-           updated_at = ?9
+           icon = ?7,
+           enabled = ?8,
+           sort_order = ?9,
+           updated_at = ?10
      WHERE id = ?1`
   )
     .bind(
@@ -490,6 +536,7 @@ export async function handleAdminUpdateTool(
       description,
       url,
       badge,
+      icon,
       enabled,
       sortOrder,
       ctx.nowIso

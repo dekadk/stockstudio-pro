@@ -1469,10 +1469,16 @@ pub struct StudioToolItem {
     pub description: String,
     pub url: String,
     pub badge: String,
+    #[serde(default = "default_studio_tool_icon")]
+    pub icon: String,
     pub enabled: bool,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn default_studio_tool_icon() -> String {
+    "sparkles".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1509,6 +1515,8 @@ pub struct CreateStudioToolPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i64>,
@@ -1526,6 +1534,8 @@ pub struct UpdateStudioToolPayload {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub badge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

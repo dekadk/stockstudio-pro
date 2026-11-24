@@ -241,6 +241,7 @@ export interface StudioToolRow {
   description: string;
   url: string;
   badge: string;
+  icon: string;
   enabled: number;
   sort_order: number;
   created_at: string;

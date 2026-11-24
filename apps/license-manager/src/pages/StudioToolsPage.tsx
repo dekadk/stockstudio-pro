@@ -1,12 +1,27 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
+  Bot,
+  Camera,
   CheckCircle2,
+  Diamond,
   Edit3,
   ExternalLink,
+  Folder,
+  Image as ImageIcon,
+  Layers,
+  LayoutGrid,
+  Palette,
   Plus,
   RefreshCw,
+  Rocket,
   ShieldAlert,
+  Smile,
+  Sparkles,
+  Tag,
   Trash2,
+  Type,
+  Video,
+  Wand2,
   Wrench,
   X,
 } from "lucide-react";
@@ -29,8 +44,37 @@ interface ToolFormState {
   description: string;
   url: string;
   badge: string;
+  icon: string;
   enabled: boolean;
   sort_order: string;
+}
+
+const TOOL_ICON_OPTIONS: Array<{
+  id: string;
+  label: string;
+  render: (className?: string) => React.ReactNode;
+}> = [
+  { id: "sparkles", label: "Sparkles", render: (c) => <Sparkles className={c} /> },
+  { id: "wand", label: "Wand", render: (c) => <Wand2 className={c} /> },
+  { id: "background", label: "Image", render: (c) => <ImageIcon className={c} /> },
+  { id: "mascot", label: "Mascot", render: (c) => <Smile className={c} /> },
+  { id: "pattern", label: "Pattern", render: (c) => <Diamond className={c} /> },
+  { id: "tag", label: "Metadata", render: (c) => <Tag className={c} /> },
+  { id: "palette", label: "Palette", render: (c) => <Palette className={c} /> },
+  { id: "layers", label: "Vector", render: (c) => <Layers className={c} /> },
+  { id: "camera", label: "Photo", render: (c) => <Camera className={c} /> },
+  { id: "video", label: "Video", render: (c) => <Video className={c} /> },
+  { id: "type", label: "Text", render: (c) => <Type className={c} /> },
+  { id: "grid", label: "Grid", render: (c) => <LayoutGrid className={c} /> },
+  { id: "bot", label: "AI Bot", render: (c) => <Bot className={c} /> },
+  { id: "rocket", label: "Boost", render: (c) => <Rocket className={c} /> },
+  { id: "folder", label: "Assets", render: (c) => <Folder className={c} /> },
+  { id: "wrench", label: "Utility", render: (c) => <Wrench className={c} /> },
+];
+
+function renderToolIcon(iconId?: string, className = "h-4 w-4") {
+  const found = TOOL_ICON_OPTIONS.find((opt) => opt.id === iconId);
+  return found ? found.render(className) : <Sparkles className={className} />;
 }
 
 const EMPTY_FORM: ToolFormState = {
@@ -40,6 +84,7 @@ const EMPTY_FORM: ToolFormState = {
   description: "",
   url: "",
   badge: "FLOW",
+  icon: "sparkles",
   enabled: true,
   sort_order: "50",
 };
@@ -116,6 +161,7 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
       description: tool.description,
       url: tool.url,
       badge: tool.badge,
+      icon: tool.icon || "sparkles",
       enabled: tool.enabled,
       sort_order: String(tool.sort_order),
     });
@@ -209,6 +255,7 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
             description: form.description.trim(),
             url: trimmedUrl,
             badge: (form.badge.trim() || inferBadgeFromUrl(trimmedUrl)).toUpperCase(),
+            icon: form.icon || "sparkles",
             enabled: form.enabled,
             sort_order: sortOrder,
           },
@@ -227,6 +274,7 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
             description: form.description.trim(),
             url: trimmedUrl,
             badge: (form.badge.trim() || inferBadgeFromUrl(trimmedUrl)).toUpperCase(),
+            icon: form.icon || "sparkles",
             enabled: form.enabled,
             sort_order: sortOrder,
           },
@@ -336,6 +384,9 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-surface-700 bg-surface-950 text-brand-orange">
+                      {renderToolIcon(tool.icon, "h-3.5 w-3.5")}
+                    </span>
                     <h2 className="font-heading text-base font-bold text-white">
                       {tool.name}
                     </h2>
@@ -548,6 +599,33 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
                     }
                     className="mt-1 w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-xs text-white focus:border-brand-orange focus:outline-none"
                   />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300">
+                  Sidebar Icon
+                </label>
+                <div className="mt-1.5 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
+                  {TOOL_ICON_OPTIONS.map((opt) => {
+                    const selected = form.icon === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setForm({ ...form, icon: opt.id })}
+                        title={opt.label}
+                        className={`flex flex-col items-center justify-center gap-1 rounded-lg border px-1.5 py-2 text-[10px] font-medium transition ${
+                          selected
+                            ? "border-brand-orange bg-brand-orange/15 text-brand-orange"
+                            : "border-surface-700 bg-surface-950 text-slate-400 hover:border-surface-500 hover:text-slate-200"
+                        }`}
+                      >
+                        {opt.render("h-4 w-4")}
+                        <span className="truncate max-w-full">{opt.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

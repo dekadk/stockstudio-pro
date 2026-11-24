@@ -1176,14 +1176,14 @@ function Sidebar({
   activeDownloadsCount?: number
   studioTools?: StudioToolDefinition[]
 }) {
-  const getToolSidebarIcon = (
-    tool: StudioToolDefinition
-  ): "background" | "mascot" | "pattern" | "aio-metadata" | "tools" => {
+  const getToolSidebarIcon = (tool: StudioToolDefinition): SidebarIconName => {
+    if (tool.icon) return tool.icon
     if (tool.id === "background") return "background"
     if (tool.id === "mascot") return "mascot"
     if (tool.id === "pattern") return "pattern"
-    if (tool.id === "aio-metadata" || tool.badge === "GEMINI") return "aio-metadata"
-    return "tools"
+    if (tool.id === "aio-metadata") return "tag"
+    if (tool.badge === "GEMINI") return "sparkles"
+    return "wand"
   }
   const getToolSidebarLabel = (tool: StudioToolDefinition) => {
     if (tool.id === "background") return "Background Studio"
@@ -1272,14 +1272,54 @@ function Sidebar({
     </aside>
   )
 }
-function SidebarIcon({ name }: { name: "accounts" | "background" | "mascot" | "pattern" | "aio-metadata" | "downloads" | "tools" | "favorites" | "license" | "updates" | "info" | "settings" }) {
+type SidebarIconName =
+  | "accounts"
+  | "background"
+  | "mascot"
+  | "pattern"
+  | "aio-metadata"
+  | "tag"
+  | "sparkles"
+  | "wand"
+  | "palette"
+  | "layers"
+  | "camera"
+  | "video"
+  | "type"
+  | "grid"
+  | "bot"
+  | "rocket"
+  | "folder"
+  | "wrench"
+  | "downloads"
+  | "tools"
+  | "favorites"
+  | "license"
+  | "updates"
+  | "info"
+  | "settings"
+
+function SidebarIcon({ name }: { name: SidebarIconName }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true }
-  const paths = {
+  const paths: Record<SidebarIconName, JSX.Element> = {
     accounts: <><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></>,
     background: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m21 16-5-5-6 6-2-2-5 5" /></>,
     mascot: <><circle cx="12" cy="13" r="7" /><path d="M9 12h.01M15 12h.01" /><path d="M9.5 15.5a3.5 3.5 0 0 0 5 0" /><path d="M8 7 6.5 4.5M16 7l1.5-2.5" /></>,
     pattern: <><path d="M12 3 16.5 7.5 12 12 7.5 7.5 12 3Z" /><path d="M12 12 16.5 16.5 12 21 7.5 16.5 12 12Z" /><path d="M3 12 7.5 7.5 12 12 7.5 16.5 3 12Z" /><path d="M12 12 16.5 7.5 21 12 16.5 16.5 12 12Z" /></>,
     "aio-metadata": <><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none" /></>,
+    tag: <><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none" /></>,
+    sparkles: <><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z" /><path d="M5 3v4M3 5h4" /></>,
+    wand: <><path d="m15 4 5 5L8 21l-5-5L15 4Z" /><path d="m12 7 5 5" /><path d="M5 3v3M3.5 4.5h3" /></>,
+    palette: <><circle cx="13.5" cy="6.5" r="1" fill="currentColor" stroke="none" /><circle cx="17.5" cy="10.5" r="1" fill="currentColor" stroke="none" /><circle cx="8.5" cy="7.5" r="1" fill="currentColor" stroke="none" /><circle cx="6.5" cy="12.5" r="1" fill="currentColor" stroke="none" /><path d="M12 2a10 10 0 1 0 0 20 2 2 0 0 0 2-2v-.5a1.5 1.5 0 0 1 1.5-1.5H17a5 5 0 0 0 5-5c0-5.5-4.5-10-10-10Z" /></>,
+    layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>,
+    camera: <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" /><circle cx="12" cy="13" r="3.2" /></>,
+    video: <><rect x="2" y="6" width="14" height="12" rx="2" /><path d="m16 10 6-3v10l-6-3v-4Z" /></>,
+    type: <><path d="M4 7V4h16v3" /><path d="M9 20h6" /><path d="M12 4v16" /></>,
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></>,
+    bot: <><path d="M12 8V4H8" /><rect x="4" y="8" width="16" height="12" rx="2" /><path d="M2 14h2M20 14h2M9 13v2M15 13v2" /></>,
+    rocket: <><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09Z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2Z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></>,
+    folder: <><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></>,
+    wrench: <><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" /></>,
     downloads: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>,
     tools: <><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" /></>,
     favorites: <path d="m12 4 2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8L12 4Z" />,
@@ -1288,7 +1328,7 @@ function SidebarIcon({ name }: { name: "accounts" | "background" | "mascot" | "p
     info: <><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8h.01" /></>,
     settings: <><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="1.8" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.8" fill="currentColor" stroke="none" /><circle cx="10" cy="18" r="1.8" fill="currentColor" stroke="none" /></>,
   }
-  return <svg className="sidebar-icon" {...common}>{paths[name]}</svg>
+  return <svg className="sidebar-icon" {...common}>{paths[name] || paths.sparkles}</svg>
 }
 function StudioToolsSection({
   tools,
