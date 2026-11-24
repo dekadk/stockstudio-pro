@@ -27,6 +27,30 @@ export type StudioToolIconId =
   | "rocket"
   | "folder"
   | "wrench"
+  | "brush"
+  | "pen"
+  | "scissors"
+  | "eraser"
+  | "crop"
+  | "maximize"
+  | "box"
+  | "shapes"
+  | "sticker"
+  | "frame"
+  | "shirt"
+  | "gift"
+  | "leaf"
+  | "flame"
+  | "star"
+  | "heart"
+  | "crown"
+  | "zap"
+  | "cpu"
+  | "brain"
+  | "file-text"
+  | "table"
+  | "music"
+  | "globe"
 
 export interface StudioToolDefinition {
   id: StudioToolId
@@ -122,6 +146,30 @@ const VALID_TOOL_ICONS = new Set<StudioToolIconId>([
   "rocket",
   "folder",
   "wrench",
+  "brush",
+  "pen",
+  "scissors",
+  "eraser",
+  "crop",
+  "maximize",
+  "box",
+  "shapes",
+  "sticker",
+  "frame",
+  "shirt",
+  "gift",
+  "leaf",
+  "flame",
+  "star",
+  "heart",
+  "crown",
+  "zap",
+  "cpu",
+  "brain",
+  "file-text",
+  "table",
+  "music",
+  "globe",
 ])
 
 function resolveToolIcon(id: string, badge: string, rawIcon?: string): StudioToolIconId {

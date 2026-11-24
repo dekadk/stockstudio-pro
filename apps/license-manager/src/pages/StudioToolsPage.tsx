@@ -1,22 +1,46 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Bot,
+  Box,
+  Brain,
+  Brush,
   Camera,
   CheckCircle2,
+  Cpu,
+  Crop,
+  Crown,
   Diamond,
   Edit3,
+  Eraser,
   ExternalLink,
+  FileText,
+  Flame,
   Folder,
+  Frame,
+  Gift,
+  Globe,
+  Heart,
   Image as ImageIcon,
   Layers,
   LayoutGrid,
+  Leaf,
+  Maximize2,
+  Music,
   Palette,
+  PenTool,
   Plus,
   RefreshCw,
   Rocket,
+  Scissors,
+  Search,
+  Shapes,
   ShieldAlert,
+  Shirt,
   Smile,
   Sparkles,
+  Star,
+  Sticker,
+  Table,
   Tag,
   Trash2,
   Type,
@@ -24,6 +48,7 @@ import {
   Wand2,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import { normalizeError, type AdminBackendClient } from "../api/client";
 import { ErrorPanel, LoadingPanel } from "../components/StateViews";
@@ -62,12 +87,36 @@ const TOOL_ICON_OPTIONS: Array<{
   { id: "tag", label: "Metadata", render: (c) => <Tag className={c} /> },
   { id: "palette", label: "Palette", render: (c) => <Palette className={c} /> },
   { id: "layers", label: "Vector", render: (c) => <Layers className={c} /> },
+  { id: "brush", label: "Brush", render: (c) => <Brush className={c} /> },
+  { id: "pen", label: "Pen Tool", render: (c) => <PenTool className={c} /> },
+  { id: "scissors", label: "Cutout", render: (c) => <Scissors className={c} /> },
+  { id: "eraser", label: "Eraser", render: (c) => <Eraser className={c} /> },
+  { id: "crop", label: "Crop", render: (c) => <Crop className={c} /> },
+  { id: "maximize", label: "Upscale", render: (c) => <Maximize2 className={c} /> },
   { id: "camera", label: "Photo", render: (c) => <Camera className={c} /> },
   { id: "video", label: "Video", render: (c) => <Video className={c} /> },
+  { id: "box", label: "3D Box", render: (c) => <Box className={c} /> },
+  { id: "shapes", label: "Shapes", render: (c) => <Shapes className={c} /> },
+  { id: "sticker", label: "Sticker", render: (c) => <Sticker className={c} /> },
+  { id: "frame", label: "Frame", render: (c) => <Frame className={c} /> },
   { id: "type", label: "Text", render: (c) => <Type className={c} /> },
   { id: "grid", label: "Grid", render: (c) => <LayoutGrid className={c} /> },
+  { id: "shirt", label: "Merch", render: (c) => <Shirt className={c} /> },
+  { id: "gift", label: "Seasonal", render: (c) => <Gift className={c} /> },
+  { id: "leaf", label: "Nature", render: (c) => <Leaf className={c} /> },
+  { id: "flame", label: "Trending", render: (c) => <Flame className={c} /> },
+  { id: "star", label: "Featured", render: (c) => <Star className={c} /> },
+  { id: "heart", label: "Lifestyle", render: (c) => <Heart className={c} /> },
+  { id: "crown", label: "Premium", render: (c) => <Crown className={c} /> },
+  { id: "zap", label: "Instant", render: (c) => <Zap className={c} /> },
   { id: "bot", label: "AI Bot", render: (c) => <Bot className={c} /> },
+  { id: "brain", label: "Ideas", render: (c) => <Brain className={c} /> },
+  { id: "cpu", label: "Engine", render: (c) => <Cpu className={c} /> },
   { id: "rocket", label: "Boost", render: (c) => <Rocket className={c} /> },
+  { id: "file-text", label: "Script", render: (c) => <FileText className={c} /> },
+  { id: "table", label: "CSV", render: (c) => <Table className={c} /> },
+  { id: "music", label: "Audio", render: (c) => <Music className={c} /> },
+  { id: "globe", label: "Web", render: (c) => <Globe className={c} /> },
   { id: "folder", label: "Assets", render: (c) => <Folder className={c} /> },
   { id: "wrench", label: "Utility", render: (c) => <Wrench className={c} /> },
 ];
@@ -116,6 +165,7 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
   const [modalMode, setModalMode] = useState<"create" | "edit" | null>(null);
   const [editingToolId, setEditingToolId] = useState<string | null>(null);
   const [form, setForm] = useState<ToolFormState>(EMPTY_FORM);
+  const [iconQuery, setIconQuery] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -603,11 +653,30 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300">
-                  Sidebar Icon
-                </label>
-                <div className="mt-1.5 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
-                  {TOOL_ICON_OPTIONS.map((opt) => {
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Sidebar Icon ({TOOL_ICON_OPTIONS.length} icons)
+                  </label>
+                  <div className="relative w-44">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      value={iconQuery}
+                      onChange={(e) => setIconQuery(e.target.value)}
+                      placeholder="Filter icon..."
+                      className="w-full rounded-md border border-surface-700 bg-surface-950 py-1 pl-6 pr-2 text-[11px] text-white focus:border-brand-orange focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="mt-1.5 grid max-h-40 grid-cols-5 gap-1.5 overflow-y-auto rounded-lg border border-surface-800 bg-surface-950/60 p-1.5 sm:grid-cols-8">
+                  {TOOL_ICON_OPTIONS.filter((opt) => {
+                    const q = iconQuery.trim().toLowerCase();
+                    return (
+                      !q ||
+                      opt.label.toLowerCase().includes(q) ||
+                      opt.id.toLowerCase().includes(q)
+                    );
+                  }).map((opt) => {
                     const selected = form.icon === opt.id;
                     return (
                       <button
@@ -622,7 +691,7 @@ export const StudioToolsPage: React.FC<StudioToolsPageProps> = ({
                         }`}
                       >
                         {opt.render("h-4 w-4")}
-                        <span className="truncate max-w-full">{opt.label}</span>
+                        <span className="max-w-full truncate">{opt.label}</span>
                       </button>
                     );
                   })}
