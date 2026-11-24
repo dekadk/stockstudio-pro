@@ -1,17 +1,26 @@
 name: Release StockStudio Pro
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag to build
         required: true
-        default: v0.2.0
+        default: v0.2.1
+      publish:
+        description: Publish release immediately (required for Tauri auto-updater)
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
 
 env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
   STOCKSTUDIO_LICENSE_API_URL: ${{ vars.STOCKSTUDIO_LICENSE_API_URL || 'https://stockstudio-pro-license-api-prod.dekadk00.workers.dev' }}
   STOCKSTUDIO_EXTENSION_ID: ${{ vars.STOCKSTUDIO_EXTENSION_ID || 'ejcjoljemplfeenipjehlhhclbkpialk' }}
 
@@ -110,7 +119,7 @@ jobs:
             Copy-Item (Join-Path $env:STOCKSTUDIO_EXTENSION_DIR $dir) (Join-Path $stageDir $dir) -Recurse
           }
           New-Item -ItemType Directory -Force -Path "dist-artifacts" | Out-Null
-          $extZip = "dist-artifacts/stockstudio-pro-chrome-extension-v0.2.0.zip"
+          $extZip = "dist-artifacts/stockstudio-pro-chrome-extension-$($env:RELEASE_TAG).zip"
           if (Test-Path $extZip) { Remove-Item -Force $extZip }
           Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath $extZip -CompressionLevel Optimal
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -157,21 +166,21 @@ jobs:
           STOCKSTUDIO_LICENSE_API_URL: ${{ env.STOCKSTUDIO_LICENSE_API_URL }}
           STOCKSTUDIO_EXTENSION_ID: ${{ env.STOCKSTUDIO_EXTENSION_ID }}
         with:
-          tagName: ${{ inputs.tag }}
-          releaseName: StockStudio Pro ${{ inputs.tag }}
-          releaseBody: Signed StockStudio Pro release.
-          releaseDraft: true
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: StockStudio Pro ${{ env.RELEASE_TAG }}
+          releaseBody: Signed StockStudio Pro ${{ env.RELEASE_TAG }} release (AIO Metadata in-app WebView, Gemini chrome cleanup, and dynamic remote Studio Tools).
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
           prerelease: false
           includeUpdaterJson: true
 
-      - name: Upload Chrome Extension ZIP to Draft Release
+      - name: Upload Chrome Extension ZIP to Release
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_UPLOAD_URL: ${{ steps.tauri_release.outputs.releaseUploadUrl }}
         run: |
           $ErrorActionPreference = "Stop"
-          $extZip = "dist-artifacts/stockstudio-pro-chrome-extension-v0.2.0.zip"
+          $extZip = "dist-artifacts/stockstudio-pro-chrome-extension-$($env:RELEASE_TAG).zip"
           if (-not (Test-Path $extZip)) {
             throw "Chrome Extension ZIP not found at $extZip"
           }
@@ -179,7 +188,7 @@ jobs:
             throw "Missing releaseUploadUrl output from tauri-apps/tauri-action."
           }
           $baseUploadUrl = $env:RELEASE_UPLOAD_URL -replace '\{\?name,label\}$', ''
-          $uploadUrl = "${baseUploadUrl}?name=stockstudio-pro-chrome-extension-v0.2.0.zip"
+          $uploadUrl = "${baseUploadUrl}?name=stockstudio-pro-chrome-extension-$($env:RELEASE_TAG).zip"
           $headers = @{
             Authorization  = "Bearer $($env:GITHUB_TOKEN)"
             Accept         = "application/vnd.github+json"
@@ -187,12 +196,12 @@ jobs:
             "User-Agent"   = "StockStudioPro-Release"
           }
           $resp = Invoke-RestMethod -Method Post -Uri $uploadUrl -Headers $headers -InFile $extZip
-          Write-Output "Uploaded Chrome Extension ZIP to Draft Release: $($resp.name) ($($resp.size) bytes)"
+          Write-Output "Uploaded Chrome Extension ZIP to Release: $($resp.name) ($($resp.size) bytes)"
 
       - name: Upload Chrome Extension ZIP workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stockstudio-pro-chrome-extension-v0.2.0
-          path: dist-artifacts/stockstudio-pro-chrome-extension-v0.2.0.zip
+          name: stockstudio-pro-chrome-extension-${{ env.RELEASE_TAG }}
+          path: dist-artifacts/stockstudio-pro-chrome-extension-${{ env.RELEASE_TAG }}.zip
           retention-days: 14
           if-no-files-found: error
