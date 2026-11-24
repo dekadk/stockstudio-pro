@@ -14,6 +14,7 @@ import { EventsPage } from "./pages/EventsPage";
 import { IssueLicensePage } from "./pages/IssueLicensePage";
 import { LicenseDetailsPage } from "./pages/LicenseDetailsPage";
 import { LicenseRegistryPage } from "./pages/LicenseRegistryPage";
+import { StudioToolsPage } from "./pages/StudioToolsPage";
 import type { Environment, LicenseSummary, SessionStatus } from "./types/api";
 import { hasPermission } from "./utils/format";
 
@@ -248,6 +249,15 @@ export const App: React.FC<AppProps> = ({
                   setSelectedLicense(null);
                   setRoute("registry");
                 }}
+              />
+            )}
+
+            {route === "tools" && (
+              <StudioToolsPage
+                client={client}
+                environment={session.environment}
+                canEdit={canUpdateLicense}
+                canDelete={canRevoke}
               />
             )}
 

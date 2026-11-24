@@ -278,6 +278,70 @@ export interface LifecycleMutationResult {
   message: string | null;
 }
 
+export interface StudioToolItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  url: string;
+  badge: string;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminStudioToolsResponse {
+  ok: boolean;
+  tools: StudioToolItem[];
+  server_time: string;
+}
+
+export interface AdminStudioToolMutationResponse {
+  ok: boolean;
+  tool: StudioToolItem | null;
+  server_time: string;
+}
+
+export interface AdminStudioToolDeleteResponse {
+  ok: boolean;
+  deleted_id: string;
+  server_time: string;
+}
+
+export interface CreateStudioToolCommandInput {
+  expected_environment: Environment;
+  payload: {
+    id?: string;
+    name: string;
+    category?: string;
+    description?: string;
+    url: string;
+    badge?: string;
+    enabled?: boolean;
+    sort_order?: number;
+  };
+}
+
+export interface UpdateStudioToolCommandInput {
+  expected_environment: Environment;
+  tool_id: string;
+  payload: {
+    name?: string;
+    category?: string;
+    description?: string;
+    url?: string;
+    badge?: string;
+    enabled?: boolean;
+    sort_order?: number;
+  };
+}
+
+export interface DeleteStudioToolCommandInput {
+  expected_environment: Environment;
+  tool_id: string;
+}
+
 export interface UpdateLicenseCommandInput {
   expected_environment: Environment;
   license_id: string;

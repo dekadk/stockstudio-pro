@@ -5,6 +5,11 @@ import type {
   AdminLicensesResponse,
   AdminMeResponse,
   AdminStatsResponse,
+  AdminStudioToolDeleteResponse,
+  AdminStudioToolMutationResponse,
+  AdminStudioToolsResponse,
+  CreateStudioToolCommandInput,
+  DeleteStudioToolCommandInput,
   Environment,
   ForceDeactivateDeviceCommandInput,
   IssueLicenseCommandInput,
@@ -17,6 +22,7 @@ import type {
   RevokeLicenseCommandInput,
   SessionStatus,
   UpdateLicenseCommandInput,
+  UpdateStudioToolCommandInput,
 } from "../types/api";
 
 /**
@@ -67,6 +73,16 @@ export interface AdminBackendClient {
   renewSubscription(
     input: RenewSubscriptionCommandInput
   ): Promise<LifecycleMutationResult>;
+  fetchStudioTools?(): Promise<AdminStudioToolsResponse>;
+  createStudioTool?(
+    input: CreateStudioToolCommandInput
+  ): Promise<AdminStudioToolMutationResponse>;
+  updateStudioTool?(
+    input: UpdateStudioToolCommandInput
+  ): Promise<AdminStudioToolMutationResponse>;
+  deleteStudioTool?(
+    input: DeleteStudioToolCommandInput
+  ): Promise<AdminStudioToolDeleteResponse>;
 }
 
 export const tauriAdminClient: AdminBackendClient = {
@@ -113,6 +129,13 @@ export const tauriAdminClient: AdminBackendClient = {
     invoke<LifecycleMutationResult>("reinstate_license", { input }),
   renewSubscription: (input) =>
     invoke<LifecycleMutationResult>("renew_subscription", { input }),
+  fetchStudioTools: () => invoke<AdminStudioToolsResponse>("fetch_studio_tools"),
+  createStudioTool: (input) =>
+    invoke<AdminStudioToolMutationResponse>("create_studio_tool", { input }),
+  updateStudioTool: (input) =>
+    invoke<AdminStudioToolMutationResponse>("update_studio_tool", { input }),
+  deleteStudioTool: (input) =>
+    invoke<AdminStudioToolDeleteResponse>("delete_studio_tool", { input }),
 };
 
 export function normalizeError(err: unknown): string {

@@ -611,6 +611,7 @@ pub fn run() {
             license_store::validate_license,
             license_store::deactivate_license,
             license_store::list_license_devices,
+            license_store::fetch_studio_tools,
             license_store::clear_license_state,
             account_store::load_accounts,
             account_store::save_accounts

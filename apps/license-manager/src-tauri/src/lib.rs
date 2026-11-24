@@ -45,6 +45,10 @@ pub fn run() {
             commands::suspend_license,
             commands::reinstate_license,
             commands::renew_subscription,
+            commands::fetch_studio_tools,
+            commands::create_studio_tool,
+            commands::update_studio_tool,
+            commands::delete_studio_tool,
         ])
         .run(tauri::generate_context!())
         .expect("error while running StockStudio Pro License Manager");

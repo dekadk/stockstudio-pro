@@ -1,22 +1,36 @@
 // =============================================================================
-// StockStudio Pro v0.3.0 — Centralized Studio Tool Registry
+// StockStudio Pro — Centralized Studio Tool Registry (Dynamic + Offline Defaults)
 //
-// All external & Google Flow shared tool URLs are defined here once rather than
-// duplicated across UI components.
+// Built-in defaults are used as fallback before first sync or when offline.
+// Live tool definitions (URL, name, badge, ON/OFF, newly added tools) are synced
+// from the StockStudio Pro License API (`GET /v1/tools`) managed via License Manager.
 // =============================================================================
 
 export type ToolLaunchMode = "google-flow-webview" | "external-browser"
 
-export type StudioToolId = "background" | "mascot" | "pattern" | "aio-metadata"
+export type StudioToolId = string
 
 export interface StudioToolDefinition {
   id: StudioToolId
   name: string
-  category: "Google Flow Tool" | "Metadata Tool"
+  category: string
   description: string
   url: string
   launchMode: ToolLaunchMode
   badge: string
+  enabled?: boolean
+  sortOrder?: number
+}
+
+export interface RemoteStudioToolPayload {
+  id: string
+  name: string
+  category: string
+  description: string
+  url: string
+  badge: string
+  enabled?: boolean
+  sort_order?: number
 }
 
 export const STUDIO_TOOLS: readonly StudioToolDefinition[] = [
@@ -28,6 +42,8 @@ export const STUDIO_TOOLS: readonly StudioToolDefinition[] = [
     url: "https://flow.google.com/shared/tool/91cce113-c49e-4021-81f3-0e2f3d2035c0",
     launchMode: "google-flow-webview",
     badge: "FLOW",
+    enabled: true,
+    sortOrder: 10,
   },
   {
     id: "mascot",
@@ -37,6 +53,8 @@ export const STUDIO_TOOLS: readonly StudioToolDefinition[] = [
     url: "https://flow.google.com/shared/tool/26646271-d332-4385-b06d-a6f2758e9c54",
     launchMode: "google-flow-webview",
     badge: "FLOW",
+    enabled: true,
+    sortOrder: 20,
   },
   {
     id: "pattern",
@@ -46,22 +64,49 @@ export const STUDIO_TOOLS: readonly StudioToolDefinition[] = [
     url: "https://flow.google.com/shared/tool/a3c286ba-7b8a-4b03-ac29-02bcc12d2281",
     launchMode: "google-flow-webview",
     badge: "FLOW",
+    enabled: true,
+    sortOrder: 30,
   },
   {
     id: "aio-metadata",
     name: "AIO Metadata",
     category: "Metadata Tool",
-    description: "Prepare microstock titles, descriptions, and keywords in your browser.",
+    description: "Prepare microstock titles, descriptions, and keywords directly inside StockStudio Pro.",
     url: "https://share.gemini.google/CwUs3ZQJlnrk",
-    launchMode: "external-browser",
-    badge: "EXTERNAL",
+    launchMode: "google-flow-webview",
+    badge: "GEMINI",
+    enabled: true,
+    sortOrder: 40,
   },
 ] as const
 
 export const BACKGROUND_TOOL: StudioToolDefinition = STUDIO_TOOLS[0]
 export const MASCOT_TOOL: StudioToolDefinition = STUDIO_TOOLS[1]
 export const PATTERN_TOOL: StudioToolDefinition = STUDIO_TOOLS[2]
+export const AIO_METADATA_TOOL: StudioToolDefinition = STUDIO_TOOLS[3]
 
-export function getStudioToolById(id: StudioToolId): StudioToolDefinition | undefined {
-  return STUDIO_TOOLS.find((tool) => tool.id === id)
+export function normalizeRemoteStudioTools(
+  remote: RemoteStudioToolPayload[]
+): StudioToolDefinition[] {
+  return remote
+    .filter((item) => item && item.enabled !== false && Boolean(item.id?.trim()) && Boolean(item.url?.trim()))
+    .map((item) => ({
+      id: item.id.trim().toLowerCase(),
+      name: item.name.trim(),
+      category: item.category?.trim() || "Studio Tool",
+      description: item.description?.trim() || "",
+      url: item.url.trim(),
+      launchMode: "google-flow-webview" as const,
+      badge: (item.badge?.trim() || "FLOW").toUpperCase(),
+      enabled: true,
+      sortOrder: typeof item.sort_order === "number" ? item.sort_order : 100,
+    }))
+    .sort((a, b) => (a.sortOrder ?? 100) - (b.sortOrder ?? 100))
+}
+
+export function getStudioToolById(
+  id: StudioToolId,
+  tools: readonly StudioToolDefinition[] = STUDIO_TOOLS
+): StudioToolDefinition | undefined {
+  return tools.find((tool) => tool.id === id)
 }

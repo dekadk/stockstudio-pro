@@ -7,10 +7,9 @@ import { check, type Update } from "@tauri-apps/plugin-updater"
 import packageJson from "../package.json"
 import { loadAccounts, saveAccounts } from "./services/account-store"
 import {
-  BACKGROUND_TOOL,
-  MASCOT_TOOL,
-  PATTERN_TOOL,
+  normalizeRemoteStudioTools,
   STUDIO_TOOLS,
+  type RemoteStudioToolPayload,
   type StudioToolDefinition,
 } from "./config/tools"
 import DownloadsPanel, { type DownloadRecord } from "./components/DownloadsPanel"
@@ -150,20 +149,20 @@ export default function App() {
     }
   })
   const [query, setQuery] = useState("")
-  const [view, setView] = useState<
-    | "accounts"
-    | "background"
-    | "mascot"
-    | "pattern"
-    | "downloads"
-    | "tools"
-    | "favorites"
-    | "license"
-    | "updates"
-    | "info"
-    | "settings"
-    | "flow"
-  >("accounts")
+  const [studioTools, setStudioTools] = useState<StudioToolDefinition[]>(() => {
+    try {
+      const cached = localStorage.getItem("stockstudio-remote-tools")
+      if (cached) {
+        const parsed = JSON.parse(cached)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return normalizeRemoteStudioTools(parsed)
+        }
+      }
+    } catch {}
+    return [...STUDIO_TOOLS]
+  })
+  const [toolsSyncing, setToolsSyncing] = useState(false)
+  const [view, setView] = useState<string>("accounts")
   const [downloads, setDownloads] = useState<DownloadRecord[]>([])
   const [active, setActive] = useState<Account | null>(null)
   const [activeToolId, setActiveToolId] = useState<string | null>(null)
@@ -587,18 +586,40 @@ export default function App() {
     setActiveToolId(tool.id)
     setActiveToolUrl(tool.url)
     setActiveToolName(tool.name)
-    setView(
-      tool.id === "background"
-        ? "background"
-        : tool.id === "mascot"
-        ? "mascot"
-        : tool.id === "pattern"
-        ? "pattern"
-        : "flow"
-    )
+    setView(`tool:${tool.id}`)
   }
-  const openBackgroundWorkspace = (explicitAccountId?: string) => {
-    const preferredId = explicitAccountId ?? toolAccountMap[BACKGROUND_TOOL.id]
+  const syncStudioTools = async (showNotice = false) => {
+    setToolsSyncing(true)
+    try {
+      const remote = await invoke<RemoteStudioToolPayload[]>("fetch_studio_tools")
+      const normalized = normalizeRemoteStudioTools(remote)
+      setStudioTools(normalized)
+      try {
+        localStorage.setItem("stockstudio-remote-tools", JSON.stringify(remote))
+      } catch {}
+      if (showNotice) {
+        setToolNotice({
+          text: `Synced ${normalized.length} studio tool${normalized.length === 1 ? "" : "s"} from server.`,
+        })
+      }
+    } catch {
+      if (showNotice) {
+        setToolNotice({
+          text: "Could not refresh tools from server; using cached tool list.",
+          isError: true,
+        })
+      }
+    } finally {
+      setToolsSyncing(false)
+    }
+  }
+  useEffect(() => {
+    if (licensed) {
+      void syncStudioTools(false)
+    }
+  }, [licensed])
+  const openToolWorkspace = (tool: StudioToolDefinition, explicitAccountId?: string) => {
+    const preferredId = explicitAccountId ?? toolAccountMap[tool.id]
     const targetAccount =
       accounts.find((a) => a.id === preferredId) ??
       active ??
@@ -606,47 +627,13 @@ export default function App() {
       accounts[0] ??
       null
     if (targetAccount) {
-      assignToolAccount(BACKGROUND_TOOL.id, targetAccount.id)
+      assignToolAccount(tool.id, targetAccount.id)
       setActive(targetAccount)
     }
-    setActiveToolId(BACKGROUND_TOOL.id)
-    setActiveToolUrl(BACKGROUND_TOOL.url)
-    setActiveToolName(BACKGROUND_TOOL.name)
-    setView("background")
-  }
-  const openMascotWorkspace = (explicitAccountId?: string) => {
-    const preferredId = explicitAccountId ?? toolAccountMap[MASCOT_TOOL.id]
-    const targetAccount =
-      accounts.find((a) => a.id === preferredId) ??
-      active ??
-      accounts.find((a) => a.favorite) ??
-      accounts[0] ??
-      null
-    if (targetAccount) {
-      assignToolAccount(MASCOT_TOOL.id, targetAccount.id)
-      setActive(targetAccount)
-    }
-    setActiveToolId(MASCOT_TOOL.id)
-    setActiveToolUrl(MASCOT_TOOL.url)
-    setActiveToolName(MASCOT_TOOL.name)
-    setView("mascot")
-  }
-  const openPatternWorkspace = (explicitAccountId?: string) => {
-    const preferredId = explicitAccountId ?? toolAccountMap[PATTERN_TOOL.id]
-    const targetAccount =
-      accounts.find((a) => a.id === preferredId) ??
-      active ??
-      accounts.find((a) => a.favorite) ??
-      accounts[0] ??
-      null
-    if (targetAccount) {
-      assignToolAccount(PATTERN_TOOL.id, targetAccount.id)
-      setActive(targetAccount)
-    }
-    setActiveToolId(PATTERN_TOOL.id)
-    setActiveToolUrl(PATTERN_TOOL.url)
-    setActiveToolName(PATTERN_TOOL.name)
-    setView("pattern")
+    setActiveToolId(tool.id)
+    setActiveToolUrl(tool.url)
+    setActiveToolName(tool.name)
+    setView(`tool:${tool.id}`)
   }
   const handleSidebarNavigate = (nextView: string, closeActiveWebview = false) => {
     if (closeActiveWebview) {
@@ -654,15 +641,15 @@ export default function App() {
     }
     setFullView(false)
     setNavigatorOpen(false)
-    if (nextView === "background") {
-      openBackgroundWorkspace()
-    } else if (nextView === "mascot") {
-      openMascotWorkspace()
-    } else if (nextView === "pattern") {
-      openPatternWorkspace()
-    } else {
-      setView(nextView as any)
+    if (nextView.startsWith("tool:")) {
+      const toolId = nextView.slice(5)
+      const matched = studioTools.find((t) => t.id === toolId)
+      if (matched) {
+        openToolWorkspace(matched)
+        return
+      }
     }
+    setView(nextView)
   }
   if (licenseChecking && !licensed)
     return <div className="gate"><div className="gate-card"><Brand /><h1>Checking your license</h1><p>Connecting securely to StockStudio Pro License Server…</p></div></div>
@@ -748,293 +735,122 @@ export default function App() {
         </div>
       </div>
     )
-  if (view === "background") {
-    const selectedBgAccount =
-      accounts.find((a) => a.id === toolAccountMap[BACKGROUND_TOOL.id]) ??
-      active ??
-      accounts[0] ??
-      null
-    const bgLiveSession = selectedBgAccount
-      ? liveSessionsByAccount[selectedBgAccount.id] ?? null
-      : null
-    return (
-      <div className={`app ${fullView ? "full" : ""}`}>
-        {!fullView && (
-          <Sidebar
-            view="background"
-            setView={(nextView: string) => handleSidebarNavigate(nextView, true)}
-            profile={profile}
-            licenseState={licenseState}
-            activeDownloadsCount={activeDownloadsCount}
-          />
-        )}
-        <main className="content flow-content">
-          {selectedBgAccount ? (
-            <FlowShell
-              account={selectedBgAccount}
-              accounts={accounts}
-              liveSessionIds={liveSessionIds}
-              toolId={BACKGROUND_TOOL.id}
-              targetUrl={BACKGROUND_TOOL.url}
-              toolName="Background Studio"
-              isBackgroundStudio
-              hasExistingBgSession={
-                Boolean(bgLiveSession) && bgLiveSession?.tool_id === BACKGROUND_TOOL.id
-              }
-              fullView={fullView}
-              navigatorOpen={navigatorOpen}
-              onToggleFullView={() => {
-                setNavigatorOpen(false)
-                setFullView((current) => !current)
-              }}
-              onToggleNavigator={() => setNavigatorOpen((current) => !current)}
-              onSelectAccount={(account) => {
-                setNavigatorOpen(false)
-                assignToolAccount(BACKGROUND_TOOL.id, account.id)
-                setActive(account)
-              }}
-              onAddAccount={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                handleAddAccount()
-              }}
+  if (view.startsWith("tool:")) {
+    const currentToolId = view.slice(5)
+    const currentTool = studioTools.find((t) => t.id === currentToolId) ?? null
+    if (currentTool) {
+      const preferredAccountId = toolAccountMap[currentTool.id]
+      const selectedToolAccount =
+        accounts.find((a) => a.id === preferredAccountId) ??
+        active ??
+        accounts.find((a) => a.favorite) ??
+        accounts[0] ??
+        null
+      const toolLiveSession = selectedToolAccount
+        ? liveSessionsByAccount[selectedToolAccount.id] ?? null
+        : null
+      const displayTitle =
+        currentTool.id === "background"
+          ? "Background Studio"
+          : currentTool.id === "mascot"
+          ? "Mascot Studio"
+          : currentTool.id === "pattern"
+          ? "Pattern Studio"
+          : currentTool.name
+      return (
+        <div className={`app ${fullView ? "full" : ""}`}>
+          {!fullView && (
+            <Sidebar
+              view={view}
+              setView={(nextView: string) => handleSidebarNavigate(nextView, true)}
+              profile={profile}
+              licenseState={licenseState}
               activeDownloadsCount={activeDownloadsCount}
-              onOpenDownloads={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("downloads")
-              }}
-              onSessionUpdated={() => void refreshLiveSessions()}
-              onBack={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                void refreshLiveSessions()
-              }}
+              studioTools={studioTools}
             />
-          ) : (
-            <div className="bg-empty-workspace">
-              <div className="eyebrow">STOCKSTUDIO PRO / BACKGROUND STUDIO</div>
-              <h1>Background Studio</h1>
-              <p>
-                Add at least one Google Flow account on the Dashboard to launch Background Studio
-                in an isolated WebView2 session.
-              </p>
-              <div className="dialog-actions">
-                <button className="secondary" onClick={() => setView("accounts")}>
-                  ‹ Back to Dashboard
-                </button>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setView("accounts")
-                    handleAddAccount()
-                  }}
-                >
-                  ＋ Add Account
-                </button>
-              </div>
-            </div>
           )}
-        </main>
-      </div>
-    )
-  }
-  if (view === "mascot") {
-    const selectedMascotAccount =
-      accounts.find((a) => a.id === toolAccountMap[MASCOT_TOOL.id]) ??
-      active ??
-      accounts[0] ??
-      null
-    const mascotLiveSession = selectedMascotAccount
-      ? liveSessionsByAccount[selectedMascotAccount.id] ?? null
-      : null
-    return (
-      <div className={`app ${fullView ? "full" : ""}`}>
-        {!fullView && (
-          <Sidebar
-            view="mascot"
-            setView={(nextView: string) => handleSidebarNavigate(nextView, true)}
-            profile={profile}
-            licenseState={licenseState}
-            activeDownloadsCount={activeDownloadsCount}
-          />
-        )}
-        <main className="content flow-content">
-          {selectedMascotAccount ? (
-            <FlowShell
-              account={selectedMascotAccount}
-              accounts={accounts}
-              liveSessionIds={liveSessionIds}
-              toolId={MASCOT_TOOL.id}
-              targetUrl={MASCOT_TOOL.url}
-              toolName="Mascot Studio"
-              studioBadgeLabel="MASCOT STUDIO"
-              hasExistingToolSession={
-                Boolean(mascotLiveSession) && mascotLiveSession?.tool_id === MASCOT_TOOL.id
-              }
-              fullView={fullView}
-              navigatorOpen={navigatorOpen}
-              onToggleFullView={() => {
-                setNavigatorOpen(false)
-                setFullView((current) => !current)
-              }}
-              onToggleNavigator={() => setNavigatorOpen((current) => !current)}
-              onSelectAccount={(account) => {
-                setNavigatorOpen(false)
-                assignToolAccount(MASCOT_TOOL.id, account.id)
-                setActive(account)
-              }}
-              onAddAccount={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                handleAddAccount()
-              }}
-              activeDownloadsCount={activeDownloadsCount}
-              onOpenDownloads={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("downloads")
-              }}
-              onSessionUpdated={() => void refreshLiveSessions()}
-              onBack={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                void refreshLiveSessions()
-              }}
-            />
-          ) : (
-            <div className="bg-empty-workspace">
-              <div className="eyebrow">STOCKSTUDIO PRO / MASCOT STUDIO</div>
-              <h1>Mascot Studio</h1>
-              <p>
-                Add at least one Google Flow account on the Dashboard to launch Mascot Studio in
-                an isolated WebView2 session.
-              </p>
-              <div className="dialog-actions">
-                <button className="secondary" onClick={() => setView("accounts")}>
-                  ‹ Back to Dashboard
-                </button>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setView("accounts")
-                    handleAddAccount()
-                  }}
-                >
-                  ＋ Add Account
-                </button>
+          <main className="content flow-content">
+            {selectedToolAccount ? (
+              <FlowShell
+                account={selectedToolAccount}
+                accounts={accounts}
+                liveSessionIds={liveSessionIds}
+                toolId={currentTool.id}
+                targetUrl={currentTool.url}
+                toolName={displayTitle}
+                isBackgroundStudio={currentTool.id === "background"}
+                studioBadgeLabel={displayTitle.toUpperCase()}
+                hasExistingBgSession={
+                  currentTool.id === "background" &&
+                  Boolean(toolLiveSession) &&
+                  toolLiveSession?.tool_id === currentTool.id
+                }
+                hasExistingToolSession={
+                  Boolean(toolLiveSession) && toolLiveSession?.tool_id === currentTool.id
+                }
+                fullView={fullView}
+                navigatorOpen={navigatorOpen}
+                onToggleFullView={() => {
+                  setNavigatorOpen(false)
+                  setFullView((current) => !current)
+                }}
+                onToggleNavigator={() => setNavigatorOpen((current) => !current)}
+                onSelectAccount={(account) => {
+                  setNavigatorOpen(false)
+                  assignToolAccount(currentTool.id, account.id)
+                  setActive(account)
+                }}
+                onAddAccount={() => {
+                  void invoke("close_google_flow")
+                  setFullView(false)
+                  setNavigatorOpen(false)
+                  setView("accounts")
+                  handleAddAccount()
+                }}
+                activeDownloadsCount={activeDownloadsCount}
+                onOpenDownloads={() => {
+                  void invoke("close_google_flow")
+                  setFullView(false)
+                  setNavigatorOpen(false)
+                  setView("downloads")
+                }}
+                onSessionUpdated={() => void refreshLiveSessions()}
+                onBack={() => {
+                  void invoke("close_google_flow")
+                  setFullView(false)
+                  setNavigatorOpen(false)
+                  setView("accounts")
+                  void refreshLiveSessions()
+                }}
+              />
+            ) : (
+              <div className="bg-empty-workspace">
+                <div className="eyebrow">STOCKSTUDIO PRO / {displayTitle.toUpperCase()}</div>
+                <h1>{displayTitle}</h1>
+                <p>
+                  Add at least one Google account on the Dashboard to launch {displayTitle} in an
+                  isolated WebView2 session inside StockStudio Pro.
+                </p>
+                <div className="dialog-actions">
+                  <button className="secondary" onClick={() => setView("accounts")}>
+                    ‹ Back to Dashboard
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      setView("accounts")
+                      handleAddAccount()
+                    }}
+                  >
+                    ＋ Add Account
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
-        </main>
-      </div>
-    )
-  }
-  if (view === "pattern") {
-    const selectedPatternAccount =
-      accounts.find((a) => a.id === toolAccountMap[PATTERN_TOOL.id]) ??
-      active ??
-      accounts[0] ??
-      null
-    const patternLiveSession = selectedPatternAccount
-      ? liveSessionsByAccount[selectedPatternAccount.id] ?? null
-      : null
-    return (
-      <div className={`app ${fullView ? "full" : ""}`}>
-        {!fullView && (
-          <Sidebar
-            view="pattern"
-            setView={(nextView: string) => handleSidebarNavigate(nextView, true)}
-            profile={profile}
-            licenseState={licenseState}
-            activeDownloadsCount={activeDownloadsCount}
-          />
-        )}
-        <main className="content flow-content">
-          {selectedPatternAccount ? (
-            <FlowShell
-              account={selectedPatternAccount}
-              accounts={accounts}
-              liveSessionIds={liveSessionIds}
-              toolId={PATTERN_TOOL.id}
-              targetUrl={PATTERN_TOOL.url}
-              toolName="Pattern Studio"
-              studioBadgeLabel="PATTERN STUDIO"
-              hasExistingToolSession={
-                Boolean(patternLiveSession) && patternLiveSession?.tool_id === PATTERN_TOOL.id
-              }
-              fullView={fullView}
-              navigatorOpen={navigatorOpen}
-              onToggleFullView={() => {
-                setNavigatorOpen(false)
-                setFullView((current) => !current)
-              }}
-              onToggleNavigator={() => setNavigatorOpen((current) => !current)}
-              onSelectAccount={(account) => {
-                setNavigatorOpen(false)
-                assignToolAccount(PATTERN_TOOL.id, account.id)
-                setActive(account)
-              }}
-              onAddAccount={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                handleAddAccount()
-              }}
-              activeDownloadsCount={activeDownloadsCount}
-              onOpenDownloads={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("downloads")
-              }}
-              onSessionUpdated={() => void refreshLiveSessions()}
-              onBack={() => {
-                void invoke("close_google_flow")
-                setFullView(false)
-                setNavigatorOpen(false)
-                setView("accounts")
-                void refreshLiveSessions()
-              }}
-            />
-          ) : (
-            <div className="bg-empty-workspace">
-              <div className="eyebrow">STOCKSTUDIO PRO / PATTERN STUDIO</div>
-              <h1>Pattern Studio</h1>
-              <p>
-                Add at least one Google Flow account on the Dashboard to launch Pattern Studio in
-                an isolated WebView2 session.
-              </p>
-              <div className="dialog-actions">
-                <button className="secondary" onClick={() => setView("accounts")}>
-                  ‹ Back to Dashboard
-                </button>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setView("accounts")
-                    handleAddAccount()
-                  }}
-                >
-                  ＋ Add Account
-                </button>
-              </div>
-            </div>
-          )}
-        </main>
-      </div>
-    )
+            )}
+          </main>
+        </div>
+      )
+    }
   }
   if (view === "flow" && active)
     return (
@@ -1046,6 +862,7 @@ export default function App() {
             profile={profile}
             licenseState={licenseState}
             activeDownloadsCount={activeDownloadsCount}
+            studioTools={studioTools}
           />
         )}
         <main className="content flow-content">
@@ -1107,6 +924,7 @@ export default function App() {
         profile={profile}
         licenseState={licenseState}
         activeDownloadsCount={activeDownloadsCount}
+        studioTools={studioTools}
       />
       <main className="content">
         <header>
@@ -1208,6 +1026,9 @@ export default function App() {
           />
         ) : view === "tools" ? (
           <StudioToolsSection
+            tools={studioTools}
+            syncing={toolsSyncing}
+            onSync={() => void syncStudioTools(true)}
             accounts={accounts}
             toolAccountMap={toolAccountMap}
             liveSessionIds={liveSessionIds}
@@ -1228,6 +1049,9 @@ export default function App() {
           <>
             {view === "accounts" && (
               <StudioToolsSection
+                tools={studioTools}
+                syncing={toolsSyncing}
+                onSync={() => void syncStudioTools(true)}
                 accounts={accounts}
                 toolAccountMap={toolAccountMap}
                 liveSessionIds={liveSessionIds}
@@ -1343,13 +1167,30 @@ function Sidebar({
   profile,
   licenseState,
   activeDownloadsCount = 0,
+  studioTools = [],
 }: {
   view: string
   setView: (v: any) => void
   profile: { name: string; avatar: string | null }
   licenseState: LicenseState | null
   activeDownloadsCount?: number
+  studioTools?: StudioToolDefinition[]
 }) {
+  const getToolSidebarIcon = (
+    tool: StudioToolDefinition
+  ): "background" | "mascot" | "pattern" | "aio-metadata" | "tools" => {
+    if (tool.id === "background") return "background"
+    if (tool.id === "mascot") return "mascot"
+    if (tool.id === "pattern") return "pattern"
+    if (tool.id === "aio-metadata" || tool.badge === "GEMINI") return "aio-metadata"
+    return "tools"
+  }
+  const getToolSidebarLabel = (tool: StudioToolDefinition) => {
+    if (tool.id === "background") return "Background Studio"
+    if (tool.id === "mascot") return "Mascot Studio"
+    if (tool.id === "pattern") return "Pattern Studio"
+    return tool.name
+  }
   return (
     <aside>
       <Brand />
@@ -1360,24 +1201,19 @@ function Sidebar({
       >
         <SidebarIcon name="accounts" /> <span>Dashboard</span>
       </button>
-      <button
-        className={view === "background" ? "active" : ""}
-        onClick={() => setView("background")}
-      >
-        <SidebarIcon name="background" /> <span>Background Studio</span>
-      </button>
-      <button
-        className={view === "mascot" ? "active" : ""}
-        onClick={() => setView("mascot")}
-      >
-        <SidebarIcon name="mascot" /> <span>Mascot Studio</span>
-      </button>
-      <button
-        className={view === "pattern" ? "active" : ""}
-        onClick={() => setView("pattern")}
-      >
-        <SidebarIcon name="pattern" /> <span>Pattern Studio</span>
-      </button>
+      {studioTools.map((tool) => {
+        const routeKey = `tool:${tool.id}`
+        return (
+          <button
+            key={tool.id}
+            className={view === routeKey ? "active" : ""}
+            onClick={() => setView(routeKey)}
+          >
+            <SidebarIcon name={getToolSidebarIcon(tool)} />{" "}
+            <span>{getToolSidebarLabel(tool)}</span>
+          </button>
+        )
+      })}
       <button
         className={view === "tools" ? "active" : ""}
         onClick={() => setView("tools")}
@@ -1436,13 +1272,14 @@ function Sidebar({
     </aside>
   )
 }
-function SidebarIcon({ name }: { name: "accounts" | "background" | "mascot" | "pattern" | "downloads" | "tools" | "favorites" | "license" | "updates" | "info" | "settings" }) {
+function SidebarIcon({ name }: { name: "accounts" | "background" | "mascot" | "pattern" | "aio-metadata" | "downloads" | "tools" | "favorites" | "license" | "updates" | "info" | "settings" }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true }
   const paths = {
     accounts: <><rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" /></>,
     background: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m21 16-5-5-6 6-2-2-5 5" /></>,
     mascot: <><circle cx="12" cy="13" r="7" /><path d="M9 12h.01M15 12h.01" /><path d="M9.5 15.5a3.5 3.5 0 0 0 5 0" /><path d="M8 7 6.5 4.5M16 7l1.5-2.5" /></>,
     pattern: <><path d="M12 3 16.5 7.5 12 12 7.5 7.5 12 3Z" /><path d="M12 12 16.5 16.5 12 21 7.5 16.5 12 12Z" /><path d="M3 12 7.5 7.5 12 12 7.5 16.5 3 12Z" /><path d="M12 12 16.5 7.5 21 12 16.5 16.5 12 12Z" /></>,
+    "aio-metadata": <><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" /><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none" /></>,
     downloads: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>,
     tools: <><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z" /></>,
     favorites: <path d="m12 4 2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8L12 4Z" />,
@@ -1454,12 +1291,18 @@ function SidebarIcon({ name }: { name: "accounts" | "background" | "mascot" | "p
   return <svg className="sidebar-icon" {...common}>{paths[name]}</svg>
 }
 function StudioToolsSection({
+  tools,
+  syncing,
+  onSync,
   accounts,
   toolAccountMap,
   liveSessionIds,
   onSelectToolAccount,
   onLaunch,
 }: {
+  tools: StudioToolDefinition[]
+  syncing?: boolean
+  onSync?: () => void
   accounts: Account[]
   toolAccountMap: Record<string, string>
   liveSessionIds: string[]
@@ -1473,14 +1316,28 @@ function StudioToolsSection({
           <h2>Studio Tools</h2>
           <p>Assign isolated Google Flow accounts per tool and run multiple sessions concurrently.</p>
         </div>
-        <span className="badge badge-accent">
-          {liveSessionIds.length > 0
-            ? `${liveSessionIds.length} LIVE SESSION${liveSessionIds.length === 1 ? "" : "S"}`
-            : `${STUDIO_TOOLS.length} TOOLS`}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {onSync && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={syncing}
+              onClick={onSync}
+              title="Refresh studio tool links from server"
+              style={{ padding: "5px 10px", fontSize: "12px" }}
+            >
+              {syncing ? "Syncing…" : "↻ Sync Tools"}
+            </button>
+          )}
+          <span className="badge badge-accent">
+            {liveSessionIds.length > 0
+              ? `${liveSessionIds.length} LIVE SESSION${liveSessionIds.length === 1 ? "" : "S"}`
+              : `${tools.length} TOOLS`}
+          </span>
+        </div>
       </div>
       <div className="tools-grid">
-        {STUDIO_TOOLS.map((tool) => {
+        {tools.map((tool) => {
           const isExternal = tool.launchMode === "external-browser"
           const needsAccount = !isExternal && accounts.length === 0
           const assignedId =

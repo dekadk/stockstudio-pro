@@ -12,6 +12,220 @@ const WEBVIEW_LABEL_PREFIX: &str = "google-flow";
 const MAX_CACHED_WEBVIEWS: usize = 10;
 const NAV_STATE_EVENT: &str = "stockstudio-webview-nav-state";
 
+/// Injected into child WebViews to present Gemini Canvas shared apps (`share.gemini.google/*`
+/// and `gemini.google.com/share/*`) cleanly full-bleed inside StockStudio Pro without the outer
+/// Gemini wrapper chrome (top Gemini logo bar, bottom "Report unsafe content", and "Try Gemini
+/// Canvas" CTA). Strictly scoped to top-level Gemini Share pages; no-op on Google Flow, OAuth,
+/// or inside the embedded app iframe itself.
+const GEMINI_SHARE_CHROME_CLEANUP_SCRIPT: &str = r#"(function () {
+  if (window !== window.top) return;
+
+  function isGeminiSharePage() {
+    var host = (window.location.hostname || "").toLowerCase();
+    var path = (window.location.pathname || "").toLowerCase();
+    if (host === "share.gemini.google") return true;
+    if (host === "gemini.google.com" && /^\/(u\/\d+\/)?share\//.test(path)) return true;
+    return false;
+  }
+
+  if (!isGeminiSharePage()) return;
+
+  var STYLE_ID = "stockstudio-gemini-clean-style";
+  var CSS_TEXT = [
+    "html[data-stockstudio-gemini-clean='1'],",
+    "html[data-stockstudio-gemini-clean='1'] body {",
+    "  overflow: hidden !important;",
+    "  margin: 0 !important;",
+    "  padding: 0 !important;",
+    "  width: 100vw !important;",
+    "  height: 100vh !important;",
+    "  background: #0f1115 !important;",
+    "}",
+    "[data-stockstudio-gemini-chrome='1'] {",
+    "  display: none !important;",
+    "  visibility: hidden !important;",
+    "  opacity: 0 !important;",
+    "  pointer-events: none !important;",
+    "}",
+    "[data-stockstudio-canvas-ancestor='1'] {",
+    "  transform: none !important;",
+    "  filter: none !important;",
+    "  perspective: none !important;",
+    "  contain: none !important;",
+    "  overflow: visible !important;",
+    "  margin: 0 !important;",
+    "  padding: 0 !important;",
+    "  border: 0 !important;",
+    "  border-radius: 0 !important;",
+    "  max-width: 100vw !important;",
+    "  max-height: 100vh !important;",
+    "  width: 100vw !important;",
+    "  height: 100vh !important;",
+    "}",
+    "iframe[data-stockstudio-canvas-frame='1'] {",
+    "  position: fixed !important;",
+    "  inset: 0 !important;",
+    "  top: 0 !important;",
+    "  left: 0 !important;",
+    "  right: 0 !important;",
+    "  bottom: 0 !important;",
+    "  width: 100vw !important;",
+    "  height: 100vh !important;",
+    "  max-width: 100vw !important;",
+    "  max-height: 100vh !important;",
+    "  margin: 0 !important;",
+    "  padding: 0 !important;",
+    "  border: 0 !important;",
+    "  border-radius: 0 !important;",
+    "  z-index: 2147483647 !important;",
+    "  background: #0f1115 !important;",
+    "}"
+  ].join("\n");
+
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    var target = document.head || document.documentElement;
+    if (!target) return;
+    var style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = CSS_TEXT;
+    target.appendChild(style);
+  }
+
+  function isIgnoredIframe(iframe) {
+    var src = (iframe.getAttribute("src") || "").toLowerCase();
+    if (
+      src.indexOf("googletagmanager.com") !== -1 ||
+      src.indexOf("doubleclick.net") !== -1 ||
+      src.indexOf("google-analytics.com") !== -1 ||
+      src.indexOf("accounts.google.com") !== -1
+    ) {
+      return true;
+    }
+    var wAttr = (iframe.getAttribute("width") || "").trim();
+    var hAttr = (iframe.getAttribute("height") || "").trim();
+    if (wAttr === "0" || hAttr === "0") return true;
+    try {
+      var cs = window.getComputedStyle(iframe);
+      if (cs.display === "none" || cs.visibility === "hidden") return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function collectIframes(root, out) {
+    if (!root || !root.querySelectorAll) return;
+    var frames = root.querySelectorAll("iframe");
+    for (var i = 0; i < frames.length; i++) {
+      out.push(frames[i]);
+    }
+    var all = root.querySelectorAll("*");
+    for (var j = 0; j < all.length; j++) {
+      if (all[j].shadowRoot) {
+        collectIframes(all[j].shadowRoot, out);
+      }
+    }
+  }
+
+  function findCanvasIframe() {
+    var iframes = [];
+    collectIframes(document, iframes);
+    var best = null;
+    var bestScore = 0;
+    for (var i = 0; i < iframes.length; i++) {
+      var iframe = iframes[i];
+      if (isIgnoredIframe(iframe)) continue;
+      var rect = iframe.getBoundingClientRect();
+      var area = Math.max(0, rect.width) * Math.max(0, rect.height);
+      var src = (iframe.getAttribute("src") || "").toLowerCase();
+      var isCanvasHint =
+        iframe.hasAttribute("srcdoc") ||
+        src.indexOf("usercontent.goog") !== -1 ||
+        src.indexOf("googleusercontent.com") !== -1 ||
+        src.indexOf("blob:") === 0;
+      if (rect.width >= 200 && rect.height >= 150) {
+        var score = area + (isCanvasHint ? 1000000 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = iframe;
+        }
+      } else if (isCanvasHint && !best) {
+        best = iframe;
+        bestScore = 1;
+      }
+    }
+    return best;
+  }
+
+  function isNonVisualTag(el) {
+    var tag = (el.tagName || "").toUpperCase();
+    return tag === "STYLE" || tag === "SCRIPT" || tag === "LINK" || tag === "META" || tag === "TITLE";
+  }
+
+  function applyCleanup() {
+    try {
+      if (!isGeminiSharePage()) return;
+      ensureStyle();
+      var frame = findCanvasIframe();
+      if (!frame) return;
+
+      document.documentElement.setAttribute("data-stockstudio-gemini-clean", "1");
+      frame.setAttribute("data-stockstudio-canvas-frame", "1");
+      frame.removeAttribute("data-stockstudio-gemini-chrome");
+
+      var current = frame;
+      while (current && current !== document.body && current !== document.documentElement) {
+        var parent = current.parentElement;
+        if (!parent) {
+          var rootNode = current.getRootNode && current.getRootNode();
+          if (rootNode && rootNode.host) {
+            current = rootNode.host;
+            continue;
+          }
+          break;
+        }
+
+        var siblings = parent.children;
+        for (var i = 0; i < siblings.length; i++) {
+          var sib = siblings[i];
+          if (sib === current || isNonVisualTag(sib)) continue;
+          sib.setAttribute("data-stockstudio-gemini-chrome", "1");
+        }
+
+        if (parent !== document.body && parent !== document.documentElement) {
+          parent.setAttribute("data-stockstudio-canvas-ancestor", "1");
+          parent.removeAttribute("data-stockstudio-gemini-chrome");
+        }
+        current = parent;
+      }
+    } catch (_) {}
+  }
+
+  var scheduled = false;
+  function scheduleCleanup() {
+    if (scheduled) return;
+    scheduled = true;
+    (window.requestAnimationFrame || setTimeout)(function () {
+      scheduled = false;
+      applyCleanup();
+    }, 16);
+  }
+
+  function startObserver() {
+    applyCleanup();
+    if (!document.documentElement) return;
+    var observer = new MutationObserver(scheduleCleanup);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener("load", scheduleCleanup, { passive: true });
+    window.addEventListener("resize", scheduleCleanup, { passive: true });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startObserver, { once: true });
+  } else {
+    startObserver();
+  }
+})();"#;
+
 /// Hosts the child WebView may navigate to (exact match or a dot-bounded subdomain).
 /// Includes Google Flow entry points, shared tools (`flow.google.com`), and
 /// Google Sign-In / OAuth / Account Onboarding hosts required for independent
@@ -20,6 +234,12 @@ const ALLOWED_NAVIGATION_HOSTS: &[&str] = &[
     "flow.google",
     "flow.google.com",
     "labs.google",
+    "share.gemini.google",
+    "gemini.google.com",
+    "gemini.google",
+    "aistudio.google.com",
+    "bard.google.com",
+    "g.co",
     "accounts.google.com",
     "accounts.youtube.com",
     "myaccount.google.com",
@@ -443,6 +663,7 @@ pub fn open<R: Runtime>(
     let dl_account_id = account_id.clone();
     let builder = WebviewBuilder::new(requested_label, url)
         .data_directory(profile)
+        .initialization_script(GEMINI_SHARE_CHROME_CLEANUP_SCRIPT)
         .on_navigation(|url| {
             let allowed = is_allowed_navigation_url(url);
             if !allowed && cfg!(debug_assertions) {
@@ -874,9 +1095,9 @@ mod tests {
 
     #[test]
     fn rejects_unlisted_hosts() {
-        assert!(!allowed("https://share.gemini.google/CwUs3ZQJlnrk"));
         assert!(!allowed("https://example.com"));
         assert!(!allowed("https://evil-google.com"));
+        assert!(!allowed("https://phishing.gemini.evil.com"));
     }
 
     #[test]
@@ -1006,8 +1227,33 @@ mod tests {
         assert!(validate_account_id(&"a".repeat(129)).is_err());
 
         assert_eq!(normalize_tool_id(Some("Background")), "background");
+        assert_eq!(normalize_tool_id(Some("aio-metadata")), "aio-metadata");
         assert_eq!(normalize_tool_id(Some("../bad")), "default");
         assert_eq!(normalize_tool_id(None), "default");
         assert!(resolve_target_flow_url(Some("https://example.com")).is_err());
+        assert!(resolve_target_flow_url(Some("https://share.gemini.google/CwUs3ZQJlnrk")).is_ok());
+    }
+
+    #[test]
+    fn allows_aio_metadata_gemini_share_and_app_hosts() {
+        let share_url = url::Url::parse("https://share.gemini.google/CwUs3ZQJlnrk").unwrap();
+        let gemini_url = url::Url::parse("https://gemini.google.com/app/test").unwrap();
+        let http_share = url::Url::parse("http://share.gemini.google/CwUs3ZQJlnrk").unwrap();
+        let evil_url = url::Url::parse("https://share.gemini.google.evil.com/phish").unwrap();
+
+        assert!(is_allowed_navigation_url(&share_url));
+        assert!(is_allowed_navigation_url(&gemini_url));
+        assert!(!is_allowed_navigation_url(&http_share));
+        assert!(!is_allowed_navigation_url(&evil_url));
+    }
+
+    #[test]
+    fn gemini_share_chrome_cleanup_script_is_scoped_and_safe() {
+        let script = super::GEMINI_SHARE_CHROME_CLEANUP_SCRIPT;
+        assert!(script.contains("window !== window.top"));
+        assert!(script.contains("share.gemini.google"));
+        assert!(script.contains("gemini.google.com"));
+        assert!(script.contains("googletagmanager.com"));
+        assert!(script.contains("data-stockstudio-canvas-frame"));
     }
 }

@@ -234,6 +234,19 @@ export interface BillingEventRow {
   processed_at: string;
 }
 
+export interface StudioToolRow {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  url: string;
+  badge: string;
+  enabled: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RequestContext {
   requestId: string;
   now: Date;

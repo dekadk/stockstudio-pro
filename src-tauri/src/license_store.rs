@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use keyring::Entry;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use stockstudio_license_core::{
     clear_license_credentials_preserving_device_id, compute_device_fingerprint, ensure_device_id,
     evaluate_offline_lease, is_terminal_error_code, lease_to_license_state,
@@ -712,6 +712,142 @@ pub async fn list_license_devices<R: Runtime>(
     let config = default_client_config()?;
     list_license_devices_internal(&config, &KeyringSecretStore, &path, license_key, Utc::now())
         .await
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StudioToolRemote {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub url: String,
+    pub badge: String,
+    #[serde(default = "default_tool_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub sort_order: i64,
+}
+
+fn default_tool_enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ApiStudioToolsResponse {
+    #[allow(dead_code)]
+    ok: bool,
+    #[serde(default)]
+    tools: Vec<StudioToolRemote>,
+}
+
+fn tools_cache_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .resolve("studio-tools-cache.json", BaseDirectory::AppLocalData)
+        .map_err(|e| e.to_string())
+}
+
+fn read_tools_cache(cache_path: &Path) -> Option<Vec<StudioToolRemote>> {
+    let raw = std::fs::read_to_string(cache_path).ok()?;
+    let parsed: Vec<StudioToolRemote> = serde_json::from_str(&raw).ok()?;
+    Some(filter_safe_tools(parsed))
+}
+
+fn write_tools_cache_atomic(cache_path: &Path, tools: &[StudioToolRemote]) {
+    if let Some(parent) = cache_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(tools) {
+        let tmp = cache_path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, cache_path);
+        }
+    }
+}
+
+fn filter_safe_tools(tools: Vec<StudioToolRemote>) -> Vec<StudioToolRemote> {
+    tools
+        .into_iter()
+        .filter(|tool| {
+            let id_ok = !tool.id.trim().is_empty() && tool.id.len() <= 64;
+            let name_ok = !tool.name.trim().is_empty();
+            let url_ok = url::Url::parse(tool.url.trim())
+                .map(|parsed| crate::webview_manager::is_allowed_navigation_url(&parsed))
+                .unwrap_or(false);
+            id_ok && name_ok && url_ok && tool.enabled
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn fetch_studio_tools<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<StudioToolRemote>, String> {
+    let cache_path = tools_cache_path(&app)?;
+    let config = match default_client_config() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            if let Some(cached) = read_tools_cache(&cache_path) {
+                return Ok(cached);
+            }
+            return Err(err);
+        }
+    };
+
+    let activation_token = KeyringSecretStore
+        .get_secret(KEYRING_ACTIVATION_TOKEN)
+        .ok()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let Some(token) = activation_token else {
+        if let Some(cached) = read_tools_cache(&cache_path) {
+            return Ok(cached);
+        }
+        return Err("No active license session".to_string());
+    };
+
+    let endpoint = format!("{}/v1/tools", config.api_base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(config.http_timeout)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .get(&endpoint)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("X-Product-Id", PRODUCT_ID)
+        .header("X-App-Version", APP_VERSION)
+        .header("Accept", "application/json")
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            let body = resp
+                .json::<ApiStudioToolsResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+            let safe_tools = filter_safe_tools(body.tools);
+            write_tools_cache_atomic(&cache_path, &safe_tools);
+            Ok(safe_tools)
+        }
+        Ok(resp) => {
+            if let Some(cached) = read_tools_cache(&cache_path) {
+                return Ok(cached);
+            }
+            Err(format!(
+                "Failed to fetch studio tools (HTTP {})",
+                resp.status().as_u16()
+            ))
+        }
+        Err(err) => {
+            if let Some(cached) = read_tools_cache(&cache_path) {
+                return Ok(cached);
+            }
+            Err(format!("Unable to reach studio tools server: {err}"))
+        }
+    }
 }
 
 #[tauri::command]

@@ -30,6 +30,10 @@ const migration0002Sql = readFileSync(
   resolve(__dirname, "..", "migrations", "0002_admin_listing_indexes.sql"),
   "utf8"
 );
+const migration0003Sql = readFileSync(
+  resolve(__dirname, "..", "migrations", "0003_studio_tools.sql"),
+  "utf8"
+);
 
 function splitSqlStatements(sql: string): string[] {
   const withoutComments = sql
@@ -139,8 +143,8 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
 
     db = await mf.getD1Database("DB");
 
-    // Apply all SQL statements from migrations 0001 and 0002
-    for (const sql of [migrationSql, migration0002Sql]) {
+    // Apply all SQL statements from migrations 0001, 0002, and 0003
+    for (const sql of [migrationSql, migration0002Sql, migration0003Sql]) {
       for (const stmt of splitSqlStatements(sql)) {
         await db.prepare(stmt).run();
       }
@@ -1965,5 +1969,146 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
       headers: adminHeaders(superAdminToken),
     });
     expect(badCursor.status).toBe(400);
+  });
+
+  it("manages dynamic Studio Tools (CRUD, ON/OFF toggle, URL allowlist, and client sync)", async () => {
+    // Seeded default 4 tools are present via admin GET
+    const initialAdmin = await callApi("/v1/admin/tools", {
+      method: "GET",
+      headers: adminHeaders(readOnlyAdminToken),
+    });
+    expect(initialAdmin.status).toBe(200);
+    expect(initialAdmin.body.tools.length).toBeGreaterThanOrEqual(4);
+
+    // Unauthenticated client GET /v1/tools is rejected
+    const unauthClient = await callApi("/v1/tools", { method: "GET" });
+    expect(unauthClient.status).toBe(401);
+
+    // Issue + activate a client license to obtain an active ssact_ token
+    const issued = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: {
+        ...adminHeaders(superAdminToken),
+        "Idempotency-Key": "test-studio-tools-lic-01",
+      },
+      body: JSON.stringify({
+        plan_code: "lifetime",
+        plan_name: "Lifetime",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+        device_limit: 2,
+      }),
+    });
+    expect(issued.status).toBe(201);
+
+    const activated = await callApi("/v1/licenses/activate", {
+      method: "POST",
+      headers: clientHeaders(),
+      body: JSON.stringify({
+        license_key: issued.body.license_key,
+        device: device1,
+      }),
+    });
+    expect(activated.status).toBe(200);
+    const clientToken = activated.body.activation_token as string;
+
+    // Create a new Gemini Canvas tool
+    const created = await callApi("/v1/admin/tools", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        name: "Prompt Helper",
+        url: "https://share.gemini.google/NewPromptTool123",
+        description: "Generate microstock prompts quickly.",
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.tool.id).toBe("prompt-helper");
+    expect(created.body.tool.badge).toBe("GEMINI");
+    expect(created.body.tool.enabled).toBe(true);
+
+    // Reject disallowed domain & HTTP URL
+    const badHost = await callApi("/v1/admin/tools", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        name: "Bad Tool",
+        url: "https://evil.example.com/tool",
+      }),
+    });
+    expect(badHost.status).toBe(400);
+
+    const badScheme = await callApi("/v1/admin/tools", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        name: "Http Tool",
+        url: "http://flow.google.com/shared/tool/123",
+      }),
+    });
+    expect(badScheme.status).toBe(400);
+
+    // Read-only admin cannot mutate tools
+    const roCreate = await callApi("/v1/admin/tools", {
+      method: "POST",
+      headers: adminHeaders(readOnlyAdminToken),
+      body: JSON.stringify({
+        name: "RO Attempt",
+        url: "https://share.gemini.google/abc",
+      }),
+    });
+    expect(roCreate.status).toBe(403);
+
+    // Toggle tool OFF and update URL
+    const toggledOff = await callApi("/v1/admin/tools/prompt-helper", {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        enabled: false,
+        url: "https://gemini.google.com/share/updated456",
+      }),
+    });
+    expect(toggledOff.status).toBe(200);
+    expect(toggledOff.body.tool.enabled).toBe(false);
+    expect(toggledOff.body.tool.url).toBe(
+      "https://gemini.google.com/share/updated456"
+    );
+
+    // Client GET /v1/tools hides disabled tool
+    const clientToolsOff = await callApi("/v1/tools", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${clientToken}` },
+    });
+    expect(clientToolsOff.status).toBe(200);
+    expect(
+      clientToolsOff.body.tools.some((t: { id: string }) => t.id === "prompt-helper")
+    ).toBe(false);
+
+    // Toggle tool back ON -> appears for client
+    const toggledOn = await callApi("/v1/admin/tools/prompt-helper", {
+      method: "PATCH",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(toggledOn.status).toBe(200);
+
+    const clientToolsOn = await callApi("/v1/tools", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${clientToken}` },
+    });
+    expect(clientToolsOn.status).toBe(200);
+    const found = clientToolsOn.body.tools.find(
+      (t: { id: string }) => t.id === "prompt-helper"
+    );
+    expect(found).toBeDefined();
+    expect(found.url).toBe("https://gemini.google.com/share/updated456");
+
+    // Delete custom tool
+    const deleted = await callApi("/v1/admin/tools/prompt-helper", {
+      method: "DELETE",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.deleted_id).toBe("prompt-helper");
   });
 });

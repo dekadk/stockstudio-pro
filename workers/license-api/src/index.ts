@@ -23,6 +23,13 @@ import {
   handleListLicenseDevices,
   handleValidateLicense,
 } from "./client-handlers";
+import {
+  handleAdminCreateTool,
+  handleAdminDeleteTool,
+  handleAdminListTools,
+  handleAdminUpdateTool,
+  handleClientListTools,
+} from "./tools-handlers";
 import { generatePrefixedId, hashClientIp } from "./crypto";
 import { ApiError, errorResponse, jsonResponse } from "./errors";
 import { Env, RequestContext } from "./types";
@@ -114,7 +121,30 @@ export async function handleRequest(
       return await handleListLicenseDevices(request, env, ctx);
     }
 
+    if (method === "GET" && path === "/v1/tools") {
+      return await handleClientListTools(request, env, ctx);
+    }
+
     // Administrative Endpoints
+    if (method === "GET" && path === "/v1/admin/tools") {
+      return await handleAdminListTools(request, env, ctx);
+    }
+
+    if (method === "POST" && path === "/v1/admin/tools") {
+      return await handleAdminCreateTool(request, env, ctx);
+    }
+
+    const adminToolMatch = path.match(/^\/v1\/admin\/tools\/([A-Za-z0-9_-]+)$/);
+    if (adminToolMatch) {
+      const toolId = adminToolMatch[1];
+      if (method === "PATCH") {
+        return await handleAdminUpdateTool(request, env, ctx, toolId);
+      }
+      if (method === "DELETE") {
+        return await handleAdminDeleteTool(request, env, ctx, toolId);
+      }
+    }
+
     if (method === "GET" && path === "/v1/admin/me") {
       return await handleAdminGetMe(request, env, ctx);
     }

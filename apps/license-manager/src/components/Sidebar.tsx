@@ -7,6 +7,7 @@ import {
   PlusCircle,
   ShieldCheck,
   Clock,
+  Wrench,
 } from "lucide-react";
 import type { SessionStatus } from "../types/api";
 import { formatCountdown, hasPermission } from "../utils/format";
@@ -17,6 +18,7 @@ export type NavRoute =
   | "registry"
   | "issue"
   | "details"
+  | "tools"
   | "events"
   | "security";
 
@@ -60,6 +62,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: "Issue License",
       icon: <PlusCircle className="h-4 w-4" />,
       allowed: canCreateLicense,
+    },
+    {
+      id: "tools",
+      label: "Tool Links",
+      icon: <Wrench className="h-4 w-4" />,
+      allowed: true,
     },
     {
       id: "events",

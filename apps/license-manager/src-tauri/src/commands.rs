@@ -10,8 +10,10 @@ use zeroize::Zeroizing;
 use crate::api::{
     validate_create_license_payload, validate_id_token, AdminApiClient, AdminEventsResponse,
     AdminLicenseDetailResponse, AdminLicensesResponse, AdminMeResponse, AdminStatsResponse,
-    CreateLicenseOutcome, CreateLicensePayload, LicenseSummaryDto, LifecycleMutationOutcome,
-    ListEventsParams, ListLicensesParams, RenewSubscriptionPayload, UpdateLicensePayload,
+    AdminStudioToolDeleteResponse, AdminStudioToolMutationResponse, AdminStudioToolsResponse,
+    CreateLicenseOutcome, CreateLicensePayload, CreateStudioToolPayload, LicenseSummaryDto,
+    LifecycleMutationOutcome, ListEventsParams, ListLicensesParams, RenewSubscriptionPayload,
+    UpdateLicensePayload, UpdateStudioToolPayload,
 };
 use crate::clipboard::{
     copy_secret_with_auto_clear, SystemClipboard, DEFAULT_CLIPBOARD_CLEAR_SECS,
@@ -1189,6 +1191,102 @@ pub async fn renew_subscription(
             message: Some(format!("{code}: {message}")),
         }),
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateStudioToolCommandInput {
+    pub expected_environment: Environment,
+    pub payload: CreateStudioToolPayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateStudioToolCommandInput {
+    pub expected_environment: Environment,
+    pub tool_id: String,
+    pub payload: UpdateStudioToolPayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteStudioToolCommandInput {
+    pub expected_environment: Environment,
+    pub tool_id: String,
+}
+
+#[tauri::command]
+pub async fn fetch_studio_tools(
+    security: State<'_, Mutex<AppSecurityState>>,
+    api: State<'_, AdminApiClient>,
+) -> Result<AdminStudioToolsResponse, String> {
+    let (key, active_env) = {
+        let mut guard = security
+            .lock()
+            .map_err(|_| "INTERNAL_ERROR: Security state lock poisoned.".to_string())?;
+        guard.get_active_key_and_env()?
+    };
+    api.list_studio_tools(active_env.base_url(), &key).await
+}
+
+#[tauri::command]
+pub async fn create_studio_tool(
+    input: CreateStudioToolCommandInput,
+    security: State<'_, Mutex<AppSecurityState>>,
+    api: State<'_, AdminApiClient>,
+) -> Result<AdminStudioToolMutationResponse, String> {
+    let (key, active_env) = {
+        let mut guard = security
+            .lock()
+            .map_err(|_| "INTERNAL_ERROR: Security state lock poisoned.".to_string())?;
+        if !guard.has_permission("licenses:update") {
+            return Err("FORBIDDEN: Admin write permission required.".to_string());
+        }
+        let (k, env) = guard.get_active_key_and_env()?;
+        enforce_environment_match(env, input.expected_environment)?;
+        (k, env)
+    };
+    api.create_studio_tool(active_env.base_url(), &key, &input.payload)
+        .await
+}
+
+#[tauri::command]
+pub async fn update_studio_tool(
+    input: UpdateStudioToolCommandInput,
+    security: State<'_, Mutex<AppSecurityState>>,
+    api: State<'_, AdminApiClient>,
+) -> Result<AdminStudioToolMutationResponse, String> {
+    let (key, active_env) = {
+        let mut guard = security
+            .lock()
+            .map_err(|_| "INTERNAL_ERROR: Security state lock poisoned.".to_string())?;
+        if !guard.has_permission("licenses:update") {
+            return Err("FORBIDDEN: Admin write permission required.".to_string());
+        }
+        let (k, env) = guard.get_active_key_and_env()?;
+        enforce_environment_match(env, input.expected_environment)?;
+        (k, env)
+    };
+    api.update_studio_tool(active_env.base_url(), &key, &input.tool_id, &input.payload)
+        .await
+}
+
+#[tauri::command]
+pub async fn delete_studio_tool(
+    input: DeleteStudioToolCommandInput,
+    security: State<'_, Mutex<AppSecurityState>>,
+    api: State<'_, AdminApiClient>,
+) -> Result<AdminStudioToolDeleteResponse, String> {
+    let (key, active_env) = {
+        let mut guard = security
+            .lock()
+            .map_err(|_| "INTERNAL_ERROR: Security state lock poisoned.".to_string())?;
+        if !guard.has_permission("licenses:revoke") {
+            return Err("FORBIDDEN: Super Admin permission required to delete tools.".to_string());
+        }
+        let (k, env) = guard.get_active_key_and_env()?;
+        enforce_environment_match(env, input.expected_environment)?;
+        (k, env)
+    };
+    api.delete_studio_tool(active_env.base_url(), &key, &input.tool_id)
+        .await
 }
 
 #[cfg(test)]

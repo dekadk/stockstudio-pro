@@ -1333,6 +1333,203 @@ impl AdminApiClient {
             }),
         }
     }
+
+    pub async fn list_studio_tools(
+        &self,
+        base_url: &str,
+        api_key: &str,
+    ) -> Result<AdminStudioToolsResponse, String> {
+        let url = Url::parse(&format!("{}/v1/admin/tools", base_url.trim_end_matches('/')))
+            .map_err(|e| format!("INVALID_URL: {e}"))?;
+        self.get_json(url, api_key).await
+    }
+
+    pub async fn create_studio_tool(
+        &self,
+        base_url: &str,
+        api_key: &str,
+        payload: &CreateStudioToolPayload,
+    ) -> Result<AdminStudioToolMutationResponse, String> {
+        let url = Url::parse(&format!("{}/v1/admin/tools", base_url.trim_end_matches('/')))
+            .map_err(|e| format!("INVALID_URL: {e}"))?;
+        let resp = self
+            .http
+            .post(url)
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", api_key.trim()))
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        if !status.is_success() {
+            return Err(format_api_error_from_body(status.as_u16(), &body));
+        }
+        serde_json::from_str::<AdminStudioToolMutationResponse>(&body)
+            .map_err(|e| format!("PARSE_ERROR: {e}"))
+    }
+
+    pub async fn update_studio_tool(
+        &self,
+        base_url: &str,
+        api_key: &str,
+        tool_id: &str,
+        payload: &UpdateStudioToolPayload,
+    ) -> Result<AdminStudioToolMutationResponse, String> {
+        validate_id_token(tool_id, "tool_id")?;
+        let url = Url::parse(&format!(
+            "{}/v1/admin/tools/{}",
+            base_url.trim_end_matches('/'),
+            tool_id.trim()
+        ))
+        .map_err(|e| format!("INVALID_URL: {e}"))?;
+        let resp = self
+            .http
+            .patch(url)
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", api_key.trim()))
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        if !status.is_success() {
+            return Err(format_api_error_from_body(status.as_u16(), &body));
+        }
+        serde_json::from_str::<AdminStudioToolMutationResponse>(&body)
+            .map_err(|e| format!("PARSE_ERROR: {e}"))
+    }
+
+    pub async fn delete_studio_tool(
+        &self,
+        base_url: &str,
+        api_key: &str,
+        tool_id: &str,
+    ) -> Result<AdminStudioToolDeleteResponse, String> {
+        validate_id_token(tool_id, "tool_id")?;
+        let url = Url::parse(&format!(
+            "{}/v1/admin/tools/{}",
+            base_url.trim_end_matches('/'),
+            tool_id.trim()
+        ))
+        .map_err(|e| format!("INVALID_URL: {e}"))?;
+        let resp = self
+            .http
+            .delete(url)
+            .header(ACCEPT, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", api_key.trim()))
+            .send()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("NETWORK_ERROR: {e}"))?;
+        if !status.is_success() {
+            return Err(format_api_error_from_body(status.as_u16(), &body));
+        }
+        serde_json::from_str::<AdminStudioToolDeleteResponse>(&body)
+            .map_err(|e| format!("PARSE_ERROR: {e}"))
+    }
+}
+
+fn format_api_error_from_body(status: u16, body: &str) -> String {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(err) = val.get("error") {
+            let code = err
+                .get("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("API_ERROR");
+            let msg = err
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Request rejected by server.");
+            return format!("{code}: {msg}");
+        }
+    }
+    format!("HTTP_{status}: Request rejected by server.")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StudioToolItem {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub url: String,
+    pub badge: String,
+    pub enabled: bool,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminStudioToolsResponse {
+    pub ok: bool,
+    pub tools: Vec<StudioToolItem>,
+    pub server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminStudioToolMutationResponse {
+    pub ok: bool,
+    pub tool: Option<StudioToolItem>,
+    pub server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminStudioToolDeleteResponse {
+    pub ok: bool,
+    pub deleted_id: String,
+    pub server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateStudioToolPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateStudioToolPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
