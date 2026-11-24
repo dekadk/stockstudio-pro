@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    background-color: #090b0e;
+    color: #e2e8f0;
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-heading {
+    font-family: "Space Grotesk", "Chakra Petch", "Segoe UI", sans-serif;
+    letter-spacing: -0.015em;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scrollbar-color: #2f374a transparent;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #2f374a;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border border-surface-700 bg-surface-900/95;
+  }
+
+  .panel-elevated {
+    @apply rounded-xl border border-surface-700 bg-surface-850 shadow-lg shadow-black/30;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 py-2 text-sm font-semibold text-surface-950 transition hover:bg-brand-orangeHover disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-surface-600 bg-surface-800 px-3.5 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-500 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-danger-subtle {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/35 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .input-dark {
+    @apply w-full rounded-lg border border-surface-600 bg-surface-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-brand-orange focus:ring-2 focus:ring-brand-orange/25;
+  }
+}

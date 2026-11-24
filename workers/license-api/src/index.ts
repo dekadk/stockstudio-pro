@@ -6,6 +6,10 @@ import {
   handleAdminCreateLicense,
   handleAdminForceDeactivateDevice,
   handleAdminGetLicense,
+  handleAdminGetMe,
+  handleAdminGetStats,
+  handleAdminListEvents,
+  handleAdminListLicenses,
   handleAdminReinstateLicense,
   handleAdminRenewSubscription,
   handleAdminRevokeLicense,
@@ -111,6 +115,22 @@ export async function handleRequest(
     }
 
     // Administrative Endpoints
+    if (method === "GET" && path === "/v1/admin/me") {
+      return await handleAdminGetMe(request, env, ctx);
+    }
+
+    if (method === "GET" && path === "/v1/admin/stats") {
+      return await handleAdminGetStats(request, env, ctx);
+    }
+
+    if (method === "GET" && path === "/v1/admin/events") {
+      return await handleAdminListEvents(request, env, ctx);
+    }
+
+    if (method === "GET" && path === "/v1/admin/licenses") {
+      return await handleAdminListLicenses(request, env, ctx);
+    }
+
     if (method === "POST" && path === "/v1/admin/licenses") {
       return await handleAdminCreateLicense(request, env, ctx);
     }

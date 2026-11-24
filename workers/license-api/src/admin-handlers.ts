@@ -1,6 +1,10 @@
 // =============================================================================
 // StockStudio Pro License API (v0.2.0) — Admin & Provider-Independent Billing
 // Endpoints:
+//   - GET    /v1/admin/me
+//   - GET    /v1/admin/stats
+//   - GET    /v1/admin/events
+//   - GET    /v1/admin/licenses
 //   - POST   /v1/admin/licenses
 //   - GET    /v1/admin/licenses/:license_id
 //   - PATCH  /v1/admin/licenses/:license_id
@@ -41,6 +45,7 @@ import {
   formatLicenseSummary,
   getDefaultDeviceLimit,
   getExpectedProductId,
+  getSigningKid,
   parseEntitlements,
   parseJsonBody,
   prepareLicenseEventStatement,
@@ -951,13 +956,42 @@ export async function handleAdminRevokeLicense(
 
   const body = await parseJsonBody<{
     reason?: unknown;
+    confirm_key_prefix?: unknown;
     external_reference_id?: unknown;
   }>(request);
+
+  if (body.confirm_key_prefix !== undefined) {
+    const providedPrefix =
+      typeof body.confirm_key_prefix === "string"
+        ? body.confirm_key_prefix.trim().toUpperCase()
+        : "";
+    if (!providedPrefix || providedPrefix !== license.key_prefix.toUpperCase()) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "Confirmation key prefix does not match the target license.",
+      });
+    }
+    if (typeof body.reason !== "string" || body.reason.trim().length === 0) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "A non-empty revocation 'reason' is required.",
+      });
+    }
+  } else if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.trim().length === 0)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "Revocation 'reason' cannot be empty.",
+    });
+  }
 
   const reason =
     typeof body.reason === "string" && body.reason.trim().length > 0
       ? body.reason.trim()
       : "Permanent administrative revocation";
+  const environment = (env.ENVIRONMENT ?? "development").toLowerCase();
 
   if (license.status === "revoked") {
     return jsonResponse(
@@ -1003,7 +1037,11 @@ export async function handleAdminRevokeLicense(
       ipHash: ctx.ipHash,
       userAgent: ctx.userAgent,
       metadata: {
+        license_prefix: license.key_prefix,
+        admin_name: admin.name,
         reason,
+        environment,
+        result: "revoked",
         external_reference_id:
           typeof body.external_reference_id === "string"
             ? body.external_reference_id
@@ -1308,6 +1346,56 @@ export async function handleAdminForceDeactivateDevice(
     });
   }
 
+  let reason = "admin_force_deactivated";
+  const rawBodyText = await request.text();
+  if (rawBodyText.trim().length > 0) {
+    let parsed: { reason?: unknown; confirm_key_prefix?: unknown };
+    try {
+      parsed = JSON.parse(rawBodyText) as {
+        reason?: unknown;
+        confirm_key_prefix?: unknown;
+      };
+    } catch {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "Malformed JSON request body.",
+      });
+    }
+    if (parsed.confirm_key_prefix !== undefined) {
+      const providedPrefix =
+        typeof parsed.confirm_key_prefix === "string"
+          ? parsed.confirm_key_prefix.trim().toUpperCase()
+          : "";
+      if (!providedPrefix || providedPrefix !== license.key_prefix.toUpperCase()) {
+        throw new ApiError({
+          code: "INVALID_REQUEST",
+          status: 400,
+          message: "Confirmation key prefix does not match the target license.",
+        });
+      }
+      if (typeof parsed.reason !== "string" || parsed.reason.trim().length === 0) {
+        throw new ApiError({
+          code: "INVALID_REQUEST",
+          status: 400,
+          message: "A non-empty deactivation 'reason' is required.",
+        });
+      }
+    }
+    if (typeof parsed.reason === "string") {
+      if (parsed.reason.trim().length === 0) {
+        throw new ApiError({
+          code: "INVALID_REQUEST",
+          status: 400,
+          message: "Deactivation 'reason' cannot be empty.",
+        });
+      }
+      reason = parsed.reason.trim();
+    }
+  }
+
+  const environment = (env.ENVIRONMENT ?? "development").toLowerCase();
+
   if (activation.status !== "active") {
     return jsonResponse(
       {
@@ -1329,11 +1417,11 @@ export async function handleAdminForceDeactivateDevice(
      SET status = 'deactivated',
          deactivated_at = ?2,
          deactivated_by = ?3,
-         deactivation_reason = 'admin_force_deactivated',
+         deactivation_reason = ?4,
          updated_at = ?2
-     WHERE id = ?1 AND status = 'active'`
+     WHERE id = ?1 AND license_id = ?5 AND status = 'active'`
   )
-    .bind(activationId, ctx.nowIso, `admin:${admin.id}`)
+    .bind(activationId, ctx.nowIso, `admin:${admin.id}`, reason, licenseId)
     .run();
 
   let newDevicesUsed = license.active_devices_count;
@@ -1357,6 +1445,12 @@ export async function handleAdminForceDeactivateDevice(
         ipHash: ctx.ipHash,
         userAgent: ctx.userAgent,
         metadata: {
+          action: "device.force_deactivated",
+          license_prefix: license.key_prefix,
+          admin_name: admin.name,
+          reason,
+          environment,
+          result: "deactivated",
           deactivated_by: `admin:${admin.id}`,
           devices_used: newDevicesUsed,
         },
@@ -1798,6 +1892,676 @@ export async function handleBillingWebhook(
       idempotent_replay: false,
       billing_event_id: billingEventId,
       processing_status: "processed",
+      server_time: ctx.nowIso,
+    },
+    200,
+    { "X-Request-Id": ctx.requestId }
+  );
+}
+
+// =============================================================================
+// LM-02: Read-Only Admin Endpoints (/v1/admin/me, /licenses, /stats, /events)
+// =============================================================================
+
+const ADMIN_ROLE_PERMISSIONS: Record<AdminRole, readonly string[]> = {
+  super_admin: [
+    "licenses:read",
+    "licenses:create",
+    "licenses:update",
+    "licenses:suspend",
+    "licenses:reinstate",
+    "licenses:renew",
+    "licenses:revoke",
+    "devices:deactivate",
+    "stats:read",
+    "events:read",
+  ],
+  support_admin: [
+    "licenses:read",
+    "licenses:update",
+    "licenses:suspend",
+    "licenses:reinstate",
+    "devices:deactivate",
+    "stats:read",
+    "events:read",
+  ],
+  billing_system: [
+    "licenses:read",
+    "licenses:create",
+    "licenses:renew",
+    "licenses:revoke",
+    "stats:read",
+  ],
+  read_only: ["licenses:read", "stats:read", "events:read"],
+};
+
+const VALID_LICENSE_STATUSES = new Set([
+  "pending_activation",
+  "active",
+  "past_due",
+  "expired",
+  "suspended",
+  "revoked",
+]);
+
+const VALID_LICENSE_TYPES = new Set(["perpetual", "subscription"]);
+const VALID_BILLING_INTERVALS = new Set(["lifetime", "monthly", "yearly"]);
+const VALID_PRODUCTS = new Set(["desktop", "vectorizer_extension"]);
+const VALID_SORTS = new Set(["created_desc", "created_asc"]);
+const VALID_ACTOR_TYPES = new Set(["client", "admin", "billing_webhook", "system"]);
+const VALID_EVENT_TYPES = new Set([
+  "license.issued",
+  "license.activated",
+  "license.rebound_on_reinstall",
+  "license.validated",
+  "license.validation_failed",
+  "license.device_limit_rejected",
+  "license.deactivated",
+  "license.expired",
+  "license.past_due",
+  "license.renewed",
+  "license.suspended",
+  "license.reinstated",
+  "license.revoked",
+  "license.updated",
+]);
+
+const ID_TOKEN_REGEX = /^[A-Za-z0-9_-]{4,64}$/;
+const SENSITIVE_META_KEY_REGEX = /(key|token|secret|pass|hash|signature|jwk|pepper|salt)/i;
+
+function parseBoundedLimit(
+  raw: string | null,
+  defaultLimit: number,
+  maxLimit: number
+): number {
+  if (raw === null || raw.trim() === "") return defaultLimit;
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `'limit' must be an integer between 1 and ${maxLimit}.`,
+    });
+  }
+  const n = Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(n) || n < 1 || n > maxLimit) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `'limit' must be an integer between 1 and ${maxLimit}.`,
+    });
+  }
+  return n;
+}
+
+function encodeCursor(obj: Record<string, unknown>): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeCursor(raw: string): Record<string, unknown> {
+  if (!raw || raw.length > 512 || !/^[A-Za-z0-9_-]+$/.test(raw)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "Invalid or malformed pagination cursor.",
+    });
+  }
+  try {
+    const padded = raw.replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - (raw.length % 4)) % 4);
+    const bin = atob(padded);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("invalid");
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "Invalid or malformed pagination cursor.",
+    });
+  }
+}
+
+function escapeSqlLike(input: string): string {
+  return input.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+function sanitizeEventMetadata(rawJson: string | null): Record<string, unknown> {
+  if (!rawJson) return {};
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (SENSITIVE_META_KEY_REGEX.test(k)) {
+        clean[k] = "[REDACTED]";
+      } else {
+        clean[k] = v;
+      }
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * GET /v1/admin/me — Returns sanitized authenticated administrator identity & permissions.
+ */
+export async function handleAdminGetMe(
+  request: Request,
+  env: Env,
+  ctx: RequestContext
+): Promise<Response> {
+  const admin = await authenticateAdmin(request, env, ctx, [
+    "super_admin",
+    "support_admin",
+    "billing_system",
+    "read_only",
+  ]);
+
+  let allowedIpsConfigured = false;
+  if (admin.allowed_ips_json && admin.allowed_ips_json.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(admin.allowed_ips_json);
+      allowedIpsConfigured = Array.isArray(parsed) && parsed.length > 0;
+    } catch {
+      allowedIpsConfigured = true;
+    }
+  }
+
+  return jsonResponse(
+    {
+      ok: true,
+      admin: {
+        id: admin.id,
+        name: admin.name,
+        key_prefix: admin.key_prefix,
+        role: admin.role,
+        permissions: ADMIN_ROLE_PERMISSIONS[admin.role],
+        allowed_ips_configured: allowedIpsConfigured,
+        expires_at: admin.expires_at,
+        last_used_at: ctx.nowIso,
+      },
+      environment: (env.ENVIRONMENT ?? "development").toLowerCase(),
+      signing_kid: getSigningKid(env),
+      server_time: ctx.nowIso,
+    },
+    200,
+    { "X-Request-Id": ctx.requestId }
+  );
+}
+
+/**
+ * GET /v1/admin/licenses — Stable keyset-paginated license registry with search & filters.
+ */
+export async function handleAdminListLicenses(
+  request: Request,
+  env: Env,
+  ctx: RequestContext
+): Promise<Response> {
+  await authenticateAdmin(request, env, ctx, [
+    "super_admin",
+    "support_admin",
+    "billing_system",
+    "read_only",
+  ]);
+
+  const url = new URL(request.url);
+  const sp = url.searchParams;
+
+  const limit = parseBoundedLimit(sp.get("limit"), 25, 100);
+  const sort = (sp.get("sort")?.trim() || "created_desc").toLowerCase();
+  if (!VALID_SORTS.has(sort)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'sort' must be 'created_desc' or 'created_asc'.",
+    });
+  }
+
+  const status = sp.get("status")?.trim() || null;
+  if (status && !VALID_LICENSE_STATUSES.has(status)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'status' filter '${status}'.`,
+    });
+  }
+
+  const licenseType = sp.get("license_type")?.trim() || null;
+  if (licenseType && !VALID_LICENSE_TYPES.has(licenseType)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'license_type' filter '${licenseType}'.`,
+    });
+  }
+
+  const billingInterval = sp.get("billing_interval")?.trim() || null;
+  if (billingInterval && !VALID_BILLING_INTERVALS.has(billingInterval)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'billing_interval' filter '${billingInterval}'.`,
+    });
+  }
+
+  const planCode = sp.get("plan_code")?.trim() || null;
+  if (planCode && planCode.length > 64) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'plan_code' filter exceeds maximum length (64).",
+    });
+  }
+
+  const product = sp.get("product")?.trim().toLowerCase() || null;
+  if (product && !VALID_PRODUCTS.has(product)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'product' filter '${product}'. Expected 'desktop' or 'vectorizer_extension'.`,
+    });
+  }
+
+  const qRaw = sp.get("q")?.trim() || null;
+  if (qRaw && qRaw.length > 100) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'q' search query exceeds maximum length (100).",
+    });
+  }
+
+  let cursorCreatedAt: string | null = null;
+  let cursorId: string | null = null;
+  const cursorRaw = sp.get("cursor")?.trim() || null;
+  if (cursorRaw) {
+    const decoded = decodeCursor(cursorRaw);
+    if (
+      decoded.v !== 1 ||
+      decoded.s !== sort ||
+      typeof decoded.c !== "string" ||
+      typeof decoded.i !== "string" ||
+      !ID_TOKEN_REGEX.test(decoded.i) ||
+      !Number.isFinite(Date.parse(decoded.c))
+    ) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "Invalid or mismatched pagination cursor.",
+      });
+    }
+    cursorCreatedAt = decoded.c;
+    cursorId = decoded.i;
+  }
+
+  const conditions: string[] = [];
+  const binds: unknown[] = [];
+  const bind = (val: unknown): string => {
+    binds.push(val);
+    return `?${binds.length}`;
+  };
+
+  if (status) {
+    conditions.push(`status = ${bind(status)}`);
+  }
+  if (licenseType) {
+    conditions.push(`license_type = ${bind(licenseType)}`);
+  }
+  if (billingInterval) {
+    conditions.push(`billing_interval = ${bind(billingInterval)}`);
+  }
+  if (planCode) {
+    conditions.push(`plan_code = ${bind(planCode)}`);
+  }
+  if (product === "vectorizer_extension") {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM json_each(entitlements_json, '$.products') WHERE value = 'vectorizer_extension')`
+    );
+  } else if (product === "desktop") {
+    conditions.push(
+      `(EXISTS (SELECT 1 FROM json_each(entitlements_json, '$.products') WHERE value = 'desktop') OR json_type(entitlements_json, '$.products') IS NULL)`
+    );
+  }
+  if (qRaw) {
+    const likePattern = `%${escapeSqlLike(qRaw)}%`;
+    const pExact = bind(qRaw);
+    const pLike = bind(likePattern);
+    conditions.push(
+      `(id = ${pExact} OR key_prefix LIKE ${pLike} ESCAPE '\\' OR customer_email LIKE ${pLike} ESCAPE '\\' OR customer_name LIKE ${pLike} ESCAPE '\\' OR external_order_id LIKE ${pLike} ESCAPE '\\' OR external_customer_id LIKE ${pLike} ESCAPE '\\')`
+    );
+  }
+  if (cursorCreatedAt && cursorId) {
+    const c1 = bind(cursorCreatedAt);
+    const c2 = bind(cursorCreatedAt);
+    const i1 = bind(cursorId);
+    if (sort === "created_desc") {
+      conditions.push(`(created_at < ${c1} OR (created_at = ${c2} AND id < ${i1}))`);
+    } else {
+      conditions.push(`(created_at > ${c1} OR (created_at = ${c2} AND id > ${i1}))`);
+    }
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const orderClause =
+    sort === "created_desc"
+      ? "ORDER BY created_at DESC, id DESC"
+      : "ORDER BY created_at ASC, id ASC";
+  const limitPlaceholder = bind(limit + 1);
+
+  const sql = `
+    SELECT id, product_id, key_prefix, plan_code, plan_name, license_type, billing_interval,
+           status, device_limit, active_devices_count, issued_at, activated_at,
+           current_period_start, current_period_end, expires_at, grace_until,
+           cancel_at_period_end, canceled_at, updates_until, max_app_version,
+           entitlements_json, customer_email, customer_name, external_customer_id,
+           external_order_id, suspended_at, revoked_at, created_at, updated_at
+    FROM licenses
+    ${whereClause}
+    ${orderClause}
+    LIMIT ${limitPlaceholder}
+  `;
+
+  const res = await env.DB.prepare(sql)
+    .bind(...binds)
+    .all<LicenseRow>();
+
+  const rows = res.results ?? [];
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const lastRow = pageRows.length > 0 ? pageRows[pageRows.length - 1] : null;
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeCursor({ v: 1, s: sort, c: lastRow.created_at, i: lastRow.id })
+      : null;
+
+  const items = pageRows.map((row) => ({
+    ...formatLicenseSummary(row),
+    customer_email: row.customer_email,
+    customer_name: row.customer_name,
+    external_customer_id: row.external_customer_id,
+    external_order_id: row.external_order_id,
+    issued_at: row.issued_at,
+    activated_at: row.activated_at,
+    suspended_at: row.suspended_at,
+    revoked_at: row.revoked_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+
+  return jsonResponse(
+    {
+      ok: true,
+      items,
+      pagination: {
+        limit,
+        sort,
+        has_more: hasMore,
+        next_cursor: nextCursor,
+      },
+      server_time: ctx.nowIso,
+    },
+    200,
+    { "X-Request-Id": ctx.requestId }
+  );
+}
+
+/**
+ * GET /v1/admin/stats — Real-time aggregate dashboard statistics from D1.
+ */
+export async function handleAdminGetStats(
+  request: Request,
+  env: Env,
+  ctx: RequestContext
+): Promise<Response> {
+  await authenticateAdmin(request, env, ctx, [
+    "super_admin",
+    "support_admin",
+    "billing_system",
+    "read_only",
+  ]);
+
+  const in7DaysIso = new Date(ctx.now.getTime() + 7 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z");
+  const last30DaysIso = new Date(ctx.now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z");
+
+  const aggRow = await env.DB.prepare(
+    `SELECT
+       COUNT(*) AS total_licenses,
+       COALESCE(SUM(CASE WHEN status = 'pending_activation' THEN 1 ELSE 0 END), 0) AS pending_activation,
+       COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active,
+       COALESCE(SUM(CASE WHEN status = 'past_due' THEN 1 ELSE 0 END), 0) AS past_due,
+       COALESCE(SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END), 0) AS expired,
+       COALESCE(SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END), 0) AS suspended,
+       COALESCE(SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END), 0) AS revoked,
+       COALESCE(SUM(CASE WHEN license_type = 'perpetual' THEN 1 ELSE 0 END), 0) AS perpetual,
+       COALESCE(SUM(CASE WHEN license_type = 'subscription' THEN 1 ELSE 0 END), 0) AS subscription,
+       COALESCE(SUM(CASE WHEN billing_interval = 'lifetime' THEN 1 ELSE 0 END), 0) AS lifetime_count,
+       COALESCE(SUM(CASE WHEN billing_interval = 'monthly' THEN 1 ELSE 0 END), 0) AS monthly_subscriptions,
+       COALESCE(SUM(CASE WHEN billing_interval = 'yearly' THEN 1 ELSE 0 END), 0) AS yearly_subscriptions,
+       COALESCE(SUM(CASE WHEN license_type = 'subscription' AND status = 'active' AND expires_at IS NOT NULL AND expires_at >= ?1 AND expires_at <= ?2 THEN 1 ELSE 0 END), 0) AS expiring_within_7d,
+       COALESCE(SUM(CASE WHEN created_at >= ?3 THEN 1 ELSE 0 END), 0) AS issued_last_30d
+     FROM licenses`
+  )
+    .bind(ctx.nowIso, in7DaysIso, last30DaysIso)
+    .first<Record<string, number>>();
+
+  const activeDevicesRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM activations WHERE status = 'active'"
+  ).first<{ count: number }>();
+
+  const n = (k: string): number => Number(aggRow?.[k] ?? 0);
+
+  return jsonResponse(
+    {
+      ok: true,
+      stats: {
+        total_licenses: n("total_licenses"),
+        by_status: {
+          pending_activation: n("pending_activation"),
+          active: n("active"),
+          past_due: n("past_due"),
+          expired: n("expired"),
+          suspended: n("suspended"),
+          revoked: n("revoked"),
+        },
+        by_license_type: {
+          perpetual: n("perpetual"),
+          subscription: n("subscription"),
+        },
+        by_billing_interval: {
+          lifetime: n("lifetime_count"),
+          monthly: n("monthly_subscriptions"),
+          yearly: n("yearly_subscriptions"),
+        },
+        active_device_activations: Number(activeDevicesRow?.count ?? 0),
+        expiring_within_7d: n("expiring_within_7d"),
+        issued_last_30d: n("issued_last_30d"),
+      },
+      environment: (env.ENVIRONMENT ?? "development").toLowerCase(),
+      signing_kid: getSigningKid(env),
+      server_time: ctx.nowIso,
+    },
+    200,
+    { "X-Request-Id": ctx.requestId }
+  );
+}
+
+/**
+ * GET /v1/admin/events — Stable keyset-paginated sanitized global audit log.
+ */
+export async function handleAdminListEvents(
+  request: Request,
+  env: Env,
+  ctx: RequestContext
+): Promise<Response> {
+  await authenticateAdmin(request, env, ctx, [
+    "super_admin",
+    "support_admin",
+    "read_only",
+  ]);
+
+  const url = new URL(request.url);
+  const sp = url.searchParams;
+
+  const limit = parseBoundedLimit(sp.get("limit"), 50, 100);
+
+  const licenseId = sp.get("license_id")?.trim() || null;
+  if (licenseId && !ID_TOKEN_REGEX.test(licenseId)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "Invalid 'license_id' filter format.",
+    });
+  }
+
+  const eventType = sp.get("event_type")?.trim() || null;
+  if (eventType && !VALID_EVENT_TYPES.has(eventType)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'event_type' filter '${eventType}'.`,
+    });
+  }
+
+  const actorType = sp.get("actor_type")?.trim() || null;
+  if (actorType && !VALID_ACTOR_TYPES.has(actorType)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: `Invalid 'actor_type' filter '${actorType}'.`,
+    });
+  }
+
+  const fromRaw = sp.get("from")?.trim() || null;
+  const toRaw = sp.get("to")?.trim() || null;
+  const fromIso = fromRaw ? validateIsoTimestamp(fromRaw, "from") : null;
+  const toIso = toRaw ? validateIsoTimestamp(toRaw, "to") : null;
+  if (fromIso && toIso && Date.parse(fromIso) > Date.parse(toIso)) {
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      status: 400,
+      message: "'from' timestamp must be less than or equal to 'to'.",
+    });
+  }
+
+  let cursorCreatedAt: string | null = null;
+  let cursorId: string | null = null;
+  const cursorRaw = sp.get("cursor")?.trim() || null;
+  if (cursorRaw) {
+    const decoded = decodeCursor(cursorRaw);
+    if (
+      decoded.v !== 1 ||
+      typeof decoded.c !== "string" ||
+      typeof decoded.i !== "string" ||
+      !ID_TOKEN_REGEX.test(decoded.i) ||
+      !Number.isFinite(Date.parse(decoded.c))
+    ) {
+      throw new ApiError({
+        code: "INVALID_REQUEST",
+        status: 400,
+        message: "Invalid or malformed pagination cursor.",
+      });
+    }
+    cursorCreatedAt = decoded.c;
+    cursorId = decoded.i;
+  }
+
+  const conditions: string[] = [];
+  const binds: unknown[] = [];
+  const bind = (val: unknown): string => {
+    binds.push(val);
+    return `?${binds.length}`;
+  };
+
+  if (licenseId) conditions.push(`license_id = ${bind(licenseId)}`);
+  if (eventType) conditions.push(`event_type = ${bind(eventType)}`);
+  if (actorType) conditions.push(`actor_type = ${bind(actorType)}`);
+  if (fromIso) conditions.push(`created_at >= ${bind(fromIso)}`);
+  if (toIso) conditions.push(`created_at <= ${bind(toIso)}`);
+  if (cursorCreatedAt && cursorId) {
+    const c1 = bind(cursorCreatedAt);
+    const c2 = bind(cursorCreatedAt);
+    const i1 = bind(cursorId);
+    conditions.push(`(created_at < ${c1} OR (created_at = ${c2} AND id < ${i1}))`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limitPlaceholder = bind(limit + 1);
+
+  const sql = `
+    SELECT id, license_id, activation_id, device_id, event_type,
+           actor_type, actor_id, previous_status, new_status,
+           ip_hash, metadata_json, created_at
+    FROM license_events
+    ${whereClause}
+    ORDER BY created_at DESC, id DESC
+    LIMIT ${limitPlaceholder}
+  `;
+
+  const res = await env.DB.prepare(sql)
+    .bind(...binds)
+    .all<{
+      id: string;
+      license_id: string | null;
+      activation_id: string | null;
+      device_id: string | null;
+      event_type: string;
+      actor_type: string;
+      actor_id: string | null;
+      previous_status: string | null;
+      new_status: string | null;
+      ip_hash: string | null;
+      metadata_json: string | null;
+      created_at: string;
+    }>();
+
+  const rows = res.results ?? [];
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const lastRow = pageRows.length > 0 ? pageRows[pageRows.length - 1] : null;
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeCursor({ v: 1, c: lastRow.created_at, i: lastRow.id })
+      : null;
+
+  const items = pageRows.map((row) => ({
+    id: row.id,
+    license_id: row.license_id,
+    activation_id: row.activation_id,
+    device_id: row.device_id,
+    event_type: row.event_type,
+    actor_type: row.actor_type,
+    actor_id: row.actor_id,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    ip_hash_prefix: row.ip_hash ? row.ip_hash.slice(0, 12) : null,
+    metadata: sanitizeEventMetadata(row.metadata_json),
+    created_at: row.created_at,
+  }));
+
+  return jsonResponse(
+    {
+      ok: true,
+      items,
+      pagination: {
+        limit,
+        has_more: hasMore,
+        next_cursor: nextCursor,
+      },
       server_time: ctx.nowIso,
     },
     200,

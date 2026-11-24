@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-release/
+dist-release-lm08b/
+dist-release-v1.0.0/
+sandbox-output/
+sandbox-output-lm08c/
+src-tauri/target/
+*.pfx
+*.p12
+*.enc.json

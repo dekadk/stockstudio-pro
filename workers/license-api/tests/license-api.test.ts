@@ -26,6 +26,10 @@ const migrationSql = readFileSync(
   resolve(__dirname, "..", "migrations", "0001_initial_license_schema.sql"),
   "utf8"
 );
+const migration0002Sql = readFileSync(
+  resolve(__dirname, "..", "migrations", "0002_admin_listing_indexes.sql"),
+  "utf8"
+);
 
 function splitSqlStatements(sql: string): string[] {
   const withoutComments = sql
@@ -135,10 +139,11 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
 
     db = await mf.getD1Database("DB");
 
-    // Apply all SQL statements from migration 0001
-    const statements = splitSqlStatements(migrationSql);
-    for (const stmt of statements) {
-      await db.prepare(stmt).run();
+    // Apply all SQL statements from migrations 0001 and 0002
+    for (const sql of [migrationSql, migration0002Sql]) {
+      for (const stmt of splitSqlStatements(sql)) {
+        await db.prepare(stmt).run();
+      }
     }
 
     // Generate ephemeral Ed25519 keypair in memory
@@ -1521,5 +1526,444 @@ describe("StockStudio Pro License API v1 (Cloudflare Workers + D1)", () => {
       "desktop",
       "vectorizer_extension",
     ]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 13 (LM-02): GET /v1/admin/me — Identity, RBAC Permissions & Sanitization
+  // ---------------------------------------------------------------------------
+  it("13. GET /v1/admin/me returns sanitized admin identity/permissions and rejects unauthorized requests", async () => {
+    const unauth = await callApi("/v1/admin/me", { method: "GET" });
+    expect(unauth.status).toBe(401);
+
+    const badToken = await callApi("/v1/admin/me", {
+      method: "GET",
+      headers: adminHeaders("ssadm_invalid_token"),
+    });
+    expect(badToken.status).toBe(401);
+
+    const superMe = await callApi("/v1/admin/me", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(superMe.status).toBe(200);
+    expect(superMe.body.ok).toBe(true);
+    expect(superMe.body.admin.role).toBe("super_admin");
+    expect(superMe.body.admin.permissions).toContain("licenses:create");
+    expect(superMe.body.admin.permissions).toContain("licenses:revoke");
+    expect(superMe.body.environment).toBe(env.ENVIRONMENT ?? "development");
+    expect(superMe.body.signing_kid).toBe("sspro-ed25519-test-01");
+    expect("key_hash" in superMe.body.admin).toBe(false);
+    expect(JSON.stringify(superMe.body)).not.toContain(superAdminToken);
+
+    const roMe = await callApi("/v1/admin/me", {
+      method: "GET",
+      headers: adminHeaders(readOnlyAdminToken),
+    });
+    expect(roMe.status).toBe(200);
+    expect(roMe.body.admin.role).toBe("read_only");
+    expect(roMe.body.admin.permissions).toEqual([
+      "licenses:read",
+      "stats:read",
+      "events:read",
+    ]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 14 (LM-02): GET /v1/admin/licenses — Cursor Pagination, Search, Filters,
+  // Tampering, SQL Injection Protection & Sensitive Field Exclusion
+  // ---------------------------------------------------------------------------
+  it("14. GET /v1/admin/licenses enforces cursor pagination, filters, search, SQLi safety, and strips sensitive fields", async () => {
+    const unauth = await callApi("/v1/admin/licenses", { method: "GET" });
+    expect(unauth.status).toBe(401);
+
+    const t1 = new Date("2026-11-20T16:00:01Z");
+    const t2 = new Date("2026-11-20T16:00:02Z");
+    const t3 = new Date("2026-11-20T16:00:03Z");
+    const t4 = new Date("2026-11-20T16:00:04Z");
+
+    const c1 = await callApi(
+      "/v1/admin/licenses",
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({
+          plan_code: "lifetime",
+          plan_name: "Lifetime Pro",
+          license_type: "perpetual",
+          billing_interval: "lifetime",
+          customer_email: "alice@studio.test",
+          customer_name: "Alice Creator",
+          external_order_id: "ORD-1001",
+          entitlements: { products: ["desktop", "vectorizer_extension"] },
+        }),
+      },
+      t1
+    );
+    const c2 = await callApi(
+      "/v1/admin/licenses",
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({
+          plan_code: "pro_monthly",
+          plan_name: "Pro Monthly",
+          license_type: "subscription",
+          billing_interval: "monthly",
+          current_period_start: "2026-11-20T16:00:00Z",
+          current_period_end: "2026-11-25T16:00:00Z",
+          customer_email: "bob@studio.test",
+          customer_name: "Bob Designer",
+          external_order_id: "ORD-1002",
+          entitlements: { products: ["desktop"] },
+        }),
+      },
+      t2
+    );
+    const c3 = await callApi(
+      "/v1/admin/licenses",
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({
+          plan_code: "pro_yearly",
+          plan_name: "Pro Yearly",
+          license_type: "subscription",
+          billing_interval: "yearly",
+          current_period_start: "2026-11-20T16:00:00Z",
+          current_period_end: "2027-11-20T16:00:00Z",
+          customer_email: "carol@studio.test",
+          external_order_id: "ORD-1003",
+          entitlements: { products: ["desktop", "vectorizer_extension"] },
+        }),
+      },
+      t3
+    );
+    const c4 = await callApi(
+      "/v1/admin/licenses",
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({
+          plan_code: "lifetime",
+          plan_name: "Lifetime Legacy",
+          license_type: "perpetual",
+          billing_interval: "lifetime",
+          customer_email: "dave@studio.test",
+        }),
+      },
+      t4
+    );
+
+    const idsDesc = [
+      c4.body.license.license_id,
+      c3.body.license.license_id,
+      c2.body.license.license_id,
+      c1.body.license.license_id,
+    ];
+
+    // Stable keyset cursor pagination (limit=2 -> 2 pages, deterministic order, no duplicates)
+    const p1 = await callApi("/v1/admin/licenses?limit=2&sort=created_desc", {
+      method: "GET",
+      headers: adminHeaders(readOnlyAdminToken),
+    });
+    expect(p1.status).toBe(200);
+    expect(p1.body.items.length).toBe(2);
+    expect(p1.body.pagination.has_more).toBe(true);
+    expect(typeof p1.body.pagination.next_cursor).toBe("string");
+
+    const p2 = await callApi(
+      `/v1/admin/licenses?limit=2&sort=created_desc&cursor=${encodeURIComponent(
+        p1.body.pagination.next_cursor
+      )}`,
+      { method: "GET", headers: adminHeaders(readOnlyAdminToken) }
+    );
+    expect(p2.status).toBe(200);
+    expect(p2.body.items.length).toBe(2);
+    expect(p2.body.pagination.has_more).toBe(false);
+    expect(p2.body.pagination.next_cursor).toBeNull();
+
+    const collectedIds = [
+      ...p1.body.items.map((x: any) => x.license_id),
+      ...p2.body.items.map((x: any) => x.license_id),
+    ];
+    expect(collectedIds).toEqual(idsDesc);
+
+    // Sensitive-field exclusion check
+    for (const item of [...p1.body.items, ...p2.body.items]) {
+      expect("key_hash" in item).toBe(false);
+      expect("license_key" in item).toBe(false);
+      expect("key_pepper_version" in item).toBe(false);
+      expect("idempotency_key" in item).toBe(false);
+    }
+    const serialized = JSON.stringify(p1.body) + JSON.stringify(p2.body);
+    expect(serialized).not.toContain(c1.body.license_key);
+    expect(serialized).not.toContain(c2.body.license_key);
+
+    // Filters: product=vectorizer_extension (c1 & c3 only), product=desktop (all 4 incl legacy c4)
+    const extOnly = await callApi("/v1/admin/licenses?product=vectorizer_extension", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(extOnly.status).toBe(200);
+    expect(extOnly.body.items.map((x: any) => x.license_id)).toEqual([
+      c3.body.license.license_id,
+      c1.body.license.license_id,
+    ]);
+
+    const deskOnly = await callApi("/v1/admin/licenses?product=desktop", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(deskOnly.status).toBe(200);
+    expect(deskOnly.body.items.length).toBe(4);
+
+    // Filters: plan_code, license_type, billing_interval, search q
+    const byEmail = await callApi("/v1/admin/licenses?q=alice@studio.test", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(byEmail.body.items.map((x: any) => x.license_id)).toEqual([
+      c1.body.license.license_id,
+    ]);
+
+    const byOrder = await callApi("/v1/admin/licenses?q=ORD-1002", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(byOrder.body.items.map((x: any) => x.license_id)).toEqual([
+      c2.body.license.license_id,
+    ]);
+
+    // Cursor tampering & sort-mismatch & invalid limit
+    const tampered = await callApi("/v1/admin/licenses?cursor=not_valid_base64!!!", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(tampered.status).toBe(400);
+
+    const sortMismatch = await callApi(
+      `/v1/admin/licenses?sort=created_asc&cursor=${encodeURIComponent(
+        p1.body.pagination.next_cursor
+      )}`,
+      { method: "GET", headers: adminHeaders(superAdminToken) }
+    );
+    expect(sortMismatch.status).toBe(400);
+
+    const badLimit = await callApi("/v1/admin/licenses?limit=999", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(badLimit.status).toBe(400);
+
+    // SQL injection payload in search q returns 200 with 0 matches & leaves DB intact
+    const sqli = await callApi(
+      `/v1/admin/licenses?q=${encodeURIComponent("' OR '1'='1'; DROP TABLE licenses;--")}`,
+      { method: "GET", headers: adminHeaders(superAdminToken) }
+    );
+    expect(sqli.status).toBe(200);
+    expect(sqli.body.items).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 15 (LM-02): GET /v1/admin/stats — Real D1 Aggregate Counts
+  // ---------------------------------------------------------------------------
+  it("15. GET /v1/admin/stats returns real aggregate license, subscription, and active device counts", async () => {
+    const unauth = await callApi("/v1/admin/stats", { method: "GET" });
+    expect(unauth.status).toBe(401);
+
+    // Issue 1 perpetual (activated), 1 monthly (expiring within 7d, activated), 1 yearly (suspended), 1 perpetual (revoked)
+    const lPerp = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "lifetime",
+        plan_name: "Lifetime",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+    const lMon = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "pro_monthly",
+        plan_name: "Monthly",
+        license_type: "subscription",
+        billing_interval: "monthly",
+        current_period_start: "2026-11-20T00:00:00Z",
+        current_period_end: "2026-11-24T00:00:00Z",
+      }),
+    });
+    const lYear = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "pro_yearly",
+        plan_name: "Yearly",
+        license_type: "subscription",
+        billing_interval: "yearly",
+        current_period_start: "2026-11-20T00:00:00Z",
+        current_period_end: "2027-11-20T00:00:00Z",
+      }),
+    });
+    const lRev = await callApi("/v1/admin/licenses", {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({
+        plan_code: "lifetime",
+        plan_name: "Lifetime Rev",
+        license_type: "perpetual",
+        billing_interval: "lifetime",
+      }),
+    });
+
+    await callApi("/v1/licenses/activate", {
+      method: "POST",
+      headers: clientHeaders(),
+      body: JSON.stringify({ license_key: lPerp.body.license_key, device: device1 }),
+    });
+    await callApi("/v1/licenses/activate", {
+      method: "POST",
+      headers: clientHeaders(),
+      body: JSON.stringify({ license_key: lMon.body.license_key, device: device2 }),
+    });
+    await callApi(`/v1/admin/licenses/${lYear.body.license.license_id}/suspend`, {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({ reason: "test suspend" }),
+    });
+    await callApi(`/v1/admin/licenses/${lRev.body.license.license_id}/revoke`, {
+      method: "POST",
+      headers: adminHeaders(superAdminToken),
+      body: JSON.stringify({ reason: "test revoke" }),
+    });
+
+    const statsRes = await callApi("/v1/admin/stats", {
+      method: "GET",
+      headers: adminHeaders(readOnlyAdminToken),
+    });
+    expect(statsRes.status).toBe(200);
+    expect(statsRes.body.stats.total_licenses).toBe(4);
+    expect(statsRes.body.stats.by_status.active).toBe(2);
+    expect(statsRes.body.stats.by_status.suspended).toBe(1);
+    expect(statsRes.body.stats.by_status.revoked).toBe(1);
+    expect(statsRes.body.stats.by_status.pending_activation).toBe(0);
+    expect(statsRes.body.stats.by_license_type.perpetual).toBe(2);
+    expect(statsRes.body.stats.by_license_type.subscription).toBe(2);
+    expect(statsRes.body.stats.by_billing_interval.monthly).toBe(1);
+    expect(statsRes.body.stats.by_billing_interval.yearly).toBe(1);
+    expect(statsRes.body.stats.active_device_activations).toBe(2);
+    expect(statsRes.body.stats.expiring_within_7d).toBe(1);
+    expect(statsRes.body.stats.issued_last_30d).toBe(4);
+  });
+
+  // ---------------------------------------------------------------------------
+  // TEST 16 (LM-02): GET /v1/admin/events — Pagination, Filters, RBAC & Sanitization
+  // ---------------------------------------------------------------------------
+  it("16. GET /v1/admin/events supports cursor pagination, filters, RBAC enforcement, and metadata sanitization", async () => {
+    const unauth = await callApi("/v1/admin/events", { method: "GET" });
+    expect(unauth.status).toBe(401);
+
+    // Create a billing_system admin key -> must be forbidden (403) on /v1/admin/events
+    const billingAdminId = generatePrefixedId("adm", baseNow.getTime() + 99);
+    const { adminApiKey: billingToken, keyPrefix: billingPrefix } =
+      generateAdminApiKey(billingAdminId);
+    const billingHash = await hashAdminApiKey(env.ADMIN_TOKEN_PEPPER, billingToken);
+    await db
+      .prepare(
+        `INSERT INTO admin_api_keys (id, name, key_prefix, key_hash, role, status, created_at)
+         VALUES (?1, 'Billing Test', ?2, ?3, 'billing_system', 'active', ?4)`
+      )
+      .bind(billingAdminId, billingPrefix, billingHash, baseNow.toISOString())
+      .run();
+
+    const forbidden = await callApi("/v1/admin/events", {
+      method: "GET",
+      headers: adminHeaders(billingToken),
+    });
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error.code).toBe("FORBIDDEN_ROLE");
+
+    // Generate 3 distinct events on one license across sequential timestamps
+    const lic = await callApi(
+      "/v1/admin/licenses",
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({
+          plan_code: "lifetime",
+          plan_name: "Lifetime",
+          license_type: "perpetual",
+          billing_interval: "lifetime",
+        }),
+      },
+      new Date("2026-11-20T16:01:00Z")
+    );
+    const licId = lic.body.license.license_id as string;
+
+    await callApi(
+      `/v1/admin/licenses/${licId}/suspend`,
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({ reason: "audit check" }),
+      },
+      new Date("2026-11-20T16:02:00Z")
+    );
+    await callApi(
+      `/v1/admin/licenses/${licId}/reinstate`,
+      {
+        method: "POST",
+        headers: adminHeaders(superAdminToken),
+        body: JSON.stringify({ reason: "audit clear" }),
+      },
+      new Date("2026-11-20T16:03:00Z")
+    );
+
+    // Paginate limit=2 then page 2
+    const e1 = await callApi(`/v1/admin/events?license_id=${licId}&limit=2`, {
+      method: "GET",
+      headers: adminHeaders(readOnlyAdminToken),
+    });
+    expect(e1.status).toBe(200);
+    expect(e1.body.items.length).toBe(2);
+    expect(e1.body.pagination.has_more).toBe(true);
+    expect(e1.body.items[0].event_type).toBe("license.reinstated");
+    expect(e1.body.items[1].event_type).toBe("license.suspended");
+    expect(e1.body.items[0].ip_hash_prefix?.length ?? 0).toBeLessThanOrEqual(12);
+    expect("ip_hash" in e1.body.items[0]).toBe(false);
+
+    const e2 = await callApi(
+      `/v1/admin/events?license_id=${licId}&limit=2&cursor=${encodeURIComponent(
+        e1.body.pagination.next_cursor
+      )}`,
+      { method: "GET", headers: adminHeaders(readOnlyAdminToken) }
+    );
+    expect(e2.status).toBe(200);
+    expect(e2.body.items.length).toBe(1);
+    expect(e2.body.items[0].event_type).toBe("license.issued");
+    expect(e2.body.pagination.has_more).toBe(false);
+
+    // Filter by event_type + date range
+    const filtered = await callApi(
+      `/v1/admin/events?license_id=${licId}&event_type=license.suspended&from=2026-11-20T16:01:30Z&to=2026-11-20T16:02:30Z`,
+      { method: "GET", headers: adminHeaders(superAdminToken) }
+    );
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.items.length).toBe(1);
+    expect(filtered.body.items[0].event_type).toBe("license.suspended");
+
+    // Invalid date range & tampered cursor rejected with 400
+    const badRange = await callApi(
+      "/v1/admin/events?from=2026-11-21T00:00:00Z&to=2026-11-20T00:00:00Z",
+      { method: "GET", headers: adminHeaders(superAdminToken) }
+    );
+    expect(badRange.status).toBe(400);
+
+    const badCursor = await callApi("/v1/admin/events?cursor=tampered!!!", {
+      method: "GET",
+      headers: adminHeaders(superAdminToken),
+    });
+    expect(badCursor.status).toBe(400);
   });
 });

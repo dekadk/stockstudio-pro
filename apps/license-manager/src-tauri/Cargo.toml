@@ -1,0 +1,33 @@
+[package]
+name = "stockstudio-pro-license-manager"
+version = "1.0.0"
+description = "Private StockStudio Pro License Manager desktop administration console"
+authors = ["StockStudio Pro"]
+edition = "2021"
+
+[lib]
+name = "stockstudio_license_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = { version = "3", features = ["windows-native"] }
+zeroize = { version = "1.8", features = ["derive"] }
+url = "2"
+aes-gcm = "0.10"
+scrypt = { version = "0.11", default-features = false, features = ["std"] }
+rand = "0.8"
+base64 = "0.22"
+arboard = "3"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tokio = { version = "1", features = ["time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync"] }
