@@ -4,7 +4,10 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod account_store;
+mod bg_remover;
 mod download_manager;
+mod eps_converter;
+mod image_upscaler;
 mod license_store;
 mod webview_manager;
 
@@ -582,6 +585,9 @@ pub fn run() {
         .manage(webview_manager::WebviewManager::default())
         .manage(AccountPopoverState::default())
         .manage(download_manager::DownloadManager::default())
+        .manage(eps_converter::ConverterState::default())
+        .manage(image_upscaler::UpscalerState::default())
+        .manage(bg_remover::BgRemoverState::default())
         .invoke_handler(tauri::generate_handler![
             expand_main_window,
             open_external_url,
@@ -613,6 +619,24 @@ pub fn run() {
             license_store::list_license_devices,
             license_store::fetch_studio_tools,
             license_store::clear_license_state,
+            eps_converter::pick_converter_files,
+            eps_converter::pick_converter_folder,
+            eps_converter::resolve_dropped_converter_paths,
+            eps_converter::scan_converter_svgs,
+            eps_converter::start_svg_to_eps_batch,
+            eps_converter::cancel_svg_to_eps_batch,
+            eps_converter::open_converter_folder,
+            eps_converter::preview_vector_audit,
+            image_upscaler::pick_upscaler_files,
+            image_upscaler::resolve_dropped_upscaler_paths,
+            image_upscaler::scan_upscaler_images,
+            image_upscaler::start_upscale_batch,
+            image_upscaler::cancel_upscale_batch,
+            bg_remover::pick_bg_remover_files,
+            bg_remover::resolve_dropped_bg_remover_paths,
+            bg_remover::scan_bg_remover_images,
+            bg_remover::start_bg_remove_batch,
+            bg_remover::cancel_bg_remove_batch,
             account_store::load_accounts,
             account_store::save_accounts
         ])

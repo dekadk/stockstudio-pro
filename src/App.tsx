@@ -6,6 +6,7 @@ import { relaunch } from "@tauri-apps/plugin-process"
 import { check, type Update } from "@tauri-apps/plugin-updater"
 import packageJson from "../package.json"
 import { loadAccounts, saveAccounts } from "./services/account-store"
+import { initToolJobListeners, useToolJobs } from "./services/tool-job-store"
 import {
   normalizeRemoteStudioTools,
   STUDIO_TOOLS,
@@ -13,6 +14,9 @@ import {
   type StudioToolDefinition,
 } from "./config/tools"
 import DownloadsPanel, { type DownloadRecord } from "./components/DownloadsPanel"
+import ConverterPanel from "./components/ConverterPanel"
+import UpscalerPanel from "./components/UpscalerPanel"
+import BgRemoverPanel from "./components/BgRemoverPanel"
 import brandLogoOrange from "./assets/branding/iconssoren.svg"
 import brandLogoWhite from "./assets/branding/iconssputih.svg"
 
@@ -102,6 +106,76 @@ const licenseDevicesLabel = (state: LicenseState | null) =>
   state && typeof state.device_limit === "number" && state.device_limit > 0
     ? `${state.devices_used ?? 1} / ${state.device_limit} Devices`
     : "—"
+
+function computeLicenseProgress(state: LicenseState | null, nowMs: number) {
+  if (!state) {
+    return {
+      isLifetime: false,
+      planDisplay: "No License",
+      countdownLabel: "Unavailable",
+      percent: 0,
+      tooltip: "License status unavailable",
+    }
+  }
+  const planDisplay = licensePlanLabel(state.plan)
+  if (state.lifetime || state.license_type === "perpetual") {
+    return {
+      isLifetime: true,
+      planDisplay,
+      countdownLabel: "∞ Lifetime",
+      percent: 100,
+      tooltip: "Lifetime License — Never expires",
+    }
+  }
+  const expiresMs = state.expires_at ? Date.parse(state.expires_at) : NaN
+  if (!Number.isFinite(expiresMs)) {
+    return {
+      isLifetime: false,
+      planDisplay,
+      countdownLabel: "Active",
+      percent: 100,
+      tooltip: "Active subscription",
+    }
+  }
+  const remainingMs = expiresMs - nowMs
+  const startMs = state.current_period_start ? Date.parse(state.current_period_start) : NaN
+  const endMs = state.current_period_end ? Date.parse(state.current_period_end) : expiresMs
+  const fallbackDays = state.billing_interval === "yearly" ? 365 : 30
+  const totalMs =
+    Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+      ? endMs - startMs
+      : fallbackDays * 24 * 60 * 60 * 1000
+  const percent =
+    remainingMs <= 0 ? 0 : Math.max(4, Math.min(100, Math.round((remainingMs / totalMs) * 100)))
+
+  let countdownLabel = "Expired"
+  if (remainingMs > 0) {
+    const totalMinutes = Math.floor(remainingMs / 60_000)
+    const days = Math.floor(totalMinutes / (60 * 24))
+    const hours = Math.floor((totalMinutes % (60 * 24)) / 60)
+    const mins = totalMinutes % 60
+    if (days >= 1) {
+      countdownLabel = `${days}d ${hours}h left`
+    } else if (hours >= 1) {
+      countdownLabel = `${hours}h ${mins}m left`
+    } else {
+      countdownLabel = `${Math.max(1, mins)}m left`
+    }
+  }
+
+  const expiryText = new Date(expiresMs).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })
+  return {
+    isLifetime: false,
+    planDisplay,
+    countdownLabel,
+    percent,
+    tooltip: `Valid until ${expiryText}`,
+  }
+}
 const plans = [
   {
     name: "30 Days",
@@ -162,6 +236,17 @@ export default function App() {
     return [...STUDIO_TOOLS]
   })
   const [toolsSyncing, setToolsSyncing] = useState(false)
+  const [appVersion, setAppVersion] = useState(APP_VERSION)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("stockstudio-sidebar-collapsed") === "1"
+    } catch {
+      return false
+    }
+  })
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
+  const [updateInstallState, setUpdateInstallState] = useState<"idle" | "downloading" | "installing" | "error">("idle")
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null)
   const [view, setView] = useState<string>("accounts")
   const [downloads, setDownloads] = useState<DownloadRecord[]>([])
   const [active, setActive] = useState<Account | null>(null)
@@ -250,6 +335,7 @@ export default function App() {
     }
   }
   useEffect(() => {
+    initToolJobListeners()
     void restoreLicenseSession()
   }, [])
   const dragSourceRef = useRef<HTMLElement | null>(null)
@@ -387,15 +473,23 @@ export default function App() {
       setNavigatorOpen(false)
     }
   }, [active, accounts, view, fullView, navigatorOpen])
-  const favoriteCount = accounts.filter((a) => a.favorite).length
+  const toolJobs = useToolJobs()
+  const isAioMetadataTool = (tool: StudioToolDefinition) =>
+    tool.id === "aio-metadata" || tool.category.toLowerCase().includes("metadata")
+  const aioMetadataTool = useMemo(
+    () => studioTools.find((t) => isAioMetadataTool(t)) ?? null,
+    [studioTools]
+  )
+  const assetCreatorTools = useMemo(
+    () => studioTools.filter((t) => !isAioMetadataTool(t)),
+    [studioTools]
+  )
   const visible = useMemo(
     () =>
-      accounts.filter(
-        (a) =>
-          (view !== "favorites" || a.favorite) &&
-          `${a.name} ${a.email}`.toLowerCase().includes(query.toLowerCase())
+      accounts.filter((a) =>
+        `${a.name} ${a.email}`.toLowerCase().includes(query.toLowerCase())
       ),
-    [accounts, query, view]
+    [accounts, query]
   )
   const displayed = useMemo(() => {
     if (!dragPreviewIds || view !== "accounts") return visible
@@ -618,6 +712,79 @@ export default function App() {
       void syncStudioTools(false)
     }
   }, [licensed])
+  useEffect(() => {
+    void getVersion()
+      .then((ver) => {
+        if (ver) setAppVersion(ver)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (!licensed) return
+    let cancelled = false
+    const checkSilently = async () => {
+      try {
+        const update = await check()
+        if (!cancelled && update?.available) {
+          setAvailableUpdate(update)
+        }
+      } catch {
+        // Silent background check: ignore network/offline errors
+      }
+    }
+    void checkSilently()
+    const timer = window.setInterval(() => {
+      void checkSilently()
+    }, 60 * 60 * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [licensed])
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem("stockstudio-sidebar-collapsed", next ? "1" : "0")
+      } catch {}
+      return next
+    })
+  }
+  const handleDirectUpdateInstall = async () => {
+    if (!availableUpdate || updateInstallState === "downloading" || updateInstallState === "installing") {
+      return
+    }
+    setUpdateInstallState("downloading")
+    setUpdateProgress(0)
+    try {
+      await invoke("close_google_flow").catch(() => {})
+      let downloaded = 0
+      let total = 0
+      await availableUpdate.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0
+          downloaded = 0
+          setUpdateProgress(0)
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength
+          if (total > 0) {
+            setUpdateProgress(Math.min(100, Math.round((downloaded / total) * 100)))
+          }
+        } else if (event.event === "Finished") {
+          setUpdateProgress(100)
+          setUpdateInstallState("installing")
+        }
+      })
+      setUpdateInstallState("installing")
+      await relaunch()
+    } catch {
+      setUpdateInstallState("error")
+      setToolNotice({
+        text: "Auto-update failed. Please check your internet connection and try again.",
+        isError: true,
+      })
+    }
+  }
   const openToolWorkspace = (tool: StudioToolDefinition, explicitAccountId?: string) => {
     const preferredId = explicitAccountId ?? toolAccountMap[tool.id]
     const targetAccount =
@@ -767,6 +934,13 @@ export default function App() {
               licenseState={licenseState}
               activeDownloadsCount={activeDownloadsCount}
               studioTools={studioTools}
+              appVersion={appVersion}
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={toggleSidebarCollapsed}
+              availableUpdate={availableUpdate}
+              updateInstallState={updateInstallState}
+              updateProgress={updateProgress}
+              onInstallUpdate={() => void handleDirectUpdateInstall()}
             />
           )}
           <main className="content flow-content">
@@ -863,6 +1037,13 @@ export default function App() {
             licenseState={licenseState}
             activeDownloadsCount={activeDownloadsCount}
             studioTools={studioTools}
+            appVersion={appVersion}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={toggleSidebarCollapsed}
+            availableUpdate={availableUpdate}
+            updateInstallState={updateInstallState}
+            updateProgress={updateProgress}
+            onInstallUpdate={() => void handleDirectUpdateInstall()}
           />
         )}
         <main className="content flow-content">
@@ -925,6 +1106,13 @@ export default function App() {
         licenseState={licenseState}
         activeDownloadsCount={activeDownloadsCount}
         studioTools={studioTools}
+        appVersion={appVersion}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebarCollapsed}
+        availableUpdate={availableUpdate}
+        updateInstallState={updateInstallState}
+        updateProgress={updateProgress}
+        onInstallUpdate={() => void handleDirectUpdateInstall()}
       />
       <main className="content">
         <header>
@@ -933,10 +1121,15 @@ export default function App() {
               STOCKSTUDIO PRO /{" "}
               {view === "settings"
                 ? "SETTINGS"
-                : view === "tools"
-                ? "STUDIO TOOLS"
-                : view === "favorites"
-                ? "FAVORITES"
+                : view === "asset-creator"
+                ? "ASSET CREATOR"
+                : view === "mastering" ||
+                  view === "converter" ||
+                  view === "upscaler" ||
+                  view === "remove-bg"
+                ? "MASTERING"
+                : view === "accounts"
+                ? "ACCOUNTS"
                 : view.toUpperCase()}
             </div>
             <h1>
@@ -944,43 +1137,52 @@ export default function App() {
                 ? "Settings"
                 : view === "downloads"
                 ? "Downloads"
-                : view === "tools"
-                ? "Studio Tools"
-                : view === "favorites"
-                ? "Favorite Accounts"
+                : view === "asset-creator"
+                ? "Asset Creator"
+                : view === "mastering"
+                ? "Mastering"
+                : view === "converter"
+                ? "Vector Optimizer"
+                : view === "upscaler"
+                ? "AI Image Upscaler"
+                : view === "remove-bg"
+                ? "Remove Background"
                 : view === "license"
                 ? "License"
                 : view === "updates"
                 ? "Updates"
                 : view === "info"
                 ? "How to Use StockStudio Pro"
-                : "Dashboard & Accounts"}
+                : "Accounts"}
             </h1>
             <p>
               {view === "settings"
                 ? "Keep StockStudio Pro personal, private, and ready to use."
                 : view === "downloads"
                 ? "Track active and completed Google Flow downloads and reveal saved files in Windows Explorer."
-                : view === "tools"
-                ? "Launch registered Google Flow generators and metadata tools from one workspace."
-                : view === "favorites"
-                ? "Your favorite Google Flow accounts in one place."
+                : view === "asset-creator"
+                ? "Generate backgrounds, icons, mascots, and patterns directly in Google Flow."
+                : view === "mastering"
+                ? "Upscale images, remove backgrounds, and optimize vectors for microstock."
+                : view === "converter"
+                ? "Clean, optimize, and export SVG files to microstock-ready EPS."
+                : view === "upscaler"
+                ? "Upscale images to microstock resolution (min 3000 px)."
+                : view === "remove-bg"
+                ? "Isolate subjects cleanly with transparent PNG output and halo-free edges."
                 : view === "license"
                 ? "Choose the StockStudio Pro license that fits your needs."
                 : view === "updates"
                 ? "Keep StockStudio Pro up to date with the latest version."
                 : view === "info"
                 ? "A quick guide to managing your Google Flow accounts."
-                : "Launch Studio Tools and manage your Google Flow accounts in one dark workspace."}
+                : "Open, reorder, and manage your isolated Google Flow accounts."}
             </p>
             {view === "accounts" && (
               <div className="account-count">
                 {accounts.length}{" "}
                 {accounts.length === 1 ? "Account" : "Accounts"}
               </div>
-            )}
-            {view === "favorites" && (
-              <div className="account-count">{favoriteCount} Favorites</div>
             )}
           </div>
           {view === "accounts" && (
@@ -1007,6 +1209,76 @@ export default function App() {
               </button>
             </div>
           )}
+          {view === "asset-creator" && (
+            <div className="header-actions">
+              <button
+                type="button"
+                className="secondary sync-tools-btn"
+                disabled={toolsSyncing}
+                onClick={() => void syncStudioTools(true)}
+                title="Refresh Asset Creator tools from server"
+              >
+                <svg
+                  className={`flow-icon-svg ${toolsSyncing ? "is-spinning" : ""}`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 16h5v5" />
+                </svg>
+                <span>{toolsSyncing ? "Syncing…" : "Sync Tools"}</span>
+              </button>
+            </div>
+          )}
+          {(view === "upscaler" || view === "remove-bg" || view === "converter") && (
+            <div className="mastering-nav-bar" role="tablist" aria-label="Mastering tools">
+              <button
+                type="button"
+                className="mastering-back-btn"
+                onClick={() => setView("mastering")}
+                title="Back to Mastering overview"
+              >
+                ‹ All
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "upscaler"}
+                className={`mastering-tab ${view === "upscaler" ? "is-active" : ""}`}
+                onClick={() => setView("upscaler")}
+              >
+                <span>Upscaler</span>
+                {toolJobs.upscaler.running && <span className="mastering-tab-dot" />}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "remove-bg"}
+                className={`mastering-tab ${view === "remove-bg" ? "is-active" : ""}`}
+                onClick={() => setView("remove-bg")}
+              >
+                <span>Remove BG</span>
+                {toolJobs.bgRemover.running && <span className="mastering-tab-dot" />}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "converter"}
+                className={`mastering-tab ${view === "converter" ? "is-active" : ""}`}
+                onClick={() => setView("converter")}
+              >
+                <span>Vector Optimizer</span>
+                {toolJobs.converter.running && <span className="mastering-tab-dot" />}
+              </button>
+            </div>
+          )}
         </header>
         {toolNotice && (
           <div className={`notice-banner ${toolNotice.isError ? "is-error" : ""}`} role="status">
@@ -1024,17 +1296,30 @@ export default function App() {
             accountNameById={accountNameById}
             onUpdated={setDownloads}
           />
-        ) : view === "tools" ? (
-          <StudioToolsSection
-            tools={studioTools}
-            syncing={toolsSyncing}
-            onSync={() => void syncStudioTools(true)}
+        ) : view === "asset-creator" ? (
+          <AssetCreatorGrid
+            tools={assetCreatorTools}
             accounts={accounts}
             toolAccountMap={toolAccountMap}
             liveSessionIds={liveSessionIds}
             onSelectToolAccount={assignToolAccount}
             onLaunch={(tool, accountId) => void handleLaunchTool(tool, accountId)}
           />
+        ) : view === "mastering" ? (
+          <MasteringGrid
+            running={{
+              upscaler: toolJobs.upscaler.running,
+              bgRemover: toolJobs.bgRemover.running,
+              converter: toolJobs.converter.running,
+            }}
+            onOpenTool={(target) => setView(target)}
+          />
+        ) : view === "converter" ? (
+          <ConverterPanel />
+        ) : view === "upscaler" ? (
+          <UpscalerPanel />
+        ) : view === "remove-bg" ? (
+          <BgRemoverPanel />
         ) : view === "license" ? (
           <LicensePage
             licenseState={licenseState}
@@ -1047,26 +1332,6 @@ export default function App() {
           <InfoPage />
         ) : (
           <>
-            {view === "accounts" && (
-              <StudioToolsSection
-                tools={studioTools}
-                syncing={toolsSyncing}
-                onSync={() => void syncStudioTools(true)}
-                accounts={accounts}
-                toolAccountMap={toolAccountMap}
-                liveSessionIds={liveSessionIds}
-                onSelectToolAccount={assignToolAccount}
-                onLaunch={(tool, accountId) => void handleLaunchTool(tool, accountId)}
-              />
-            )}
-            {view === "accounts" && (
-              <div className="section-header">
-                <div>
-                  <h2>Google Flow Accounts</h2>
-                  <p>Open, reorder, or manage your isolated Google Flow sessions.</p>
-                </div>
-              </div>
-            )}
             <div className="grid">
               {displayed.map((a) => (
                 <Card
@@ -1081,7 +1346,6 @@ export default function App() {
                     setActiveToolName(null)
                     setView("flow")
                   }}
-                  onFavorite={() => handleToggleFavorite(a)}
                   onDelete={() => handleDelete(a)}
                   onRename={() => handleRename(a)}
                   dragEnabled={view === "accounts" && !query.trim()}
@@ -1153,11 +1417,56 @@ export default function App() {
     </div>
   )
 }
-function Brand() {
+function Brand({
+  appVersion,
+  collapsed = false,
+  availableUpdate = null,
+  updateInstallState = "idle",
+  updateProgress = null,
+  onInstallUpdate,
+}: {
+  appVersion?: string
+  collapsed?: boolean
+  availableUpdate?: Update | null
+  updateInstallState?: "idle" | "downloading" | "installing" | "error"
+  updateProgress?: number | null
+  onInstallUpdate?: () => void
+}) {
+  const isUpdating = updateInstallState === "downloading" || updateInstallState === "installing"
+  const updateLabel =
+    updateInstallState === "installing"
+      ? "Installing…"
+      : updateInstallState === "downloading"
+      ? updateProgress !== null
+        ? `Updating ${updateProgress}%`
+        : "Downloading…"
+      : availableUpdate?.version
+      ? `↑ Update v${availableUpdate.version}`
+      : "↑ Update"
   return (
-    <div className="brand">
+    <div className={`brand ${collapsed ? "is-collapsed" : ""}`}>
       <img className="brand-image" src={brandLogoOrange} alt="StockStudio Pro logo" />
-      <span>STOCKSTUDIO PRO</span>
+      {!collapsed && (
+        <div className="brand-meta">
+          <span className="brand-title">StockStudio Pro</span>
+          {appVersion && (
+            <div className="brand-badges">
+              <span className="brand-version-pill">v{appVersion}</span>
+              {availableUpdate && onInstallUpdate && (
+                <button
+                  type="button"
+                  className="brand-update-pill"
+                  disabled={isUpdating}
+                  onClick={onInstallUpdate}
+                  title={`Install StockStudio Pro v${availableUpdate.version} now`}
+                >
+                  {updateLabel}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1168,6 +1477,13 @@ function Sidebar({
   licenseState,
   activeDownloadsCount = 0,
   studioTools = [],
+  appVersion = APP_VERSION,
+  collapsed = false,
+  onToggleCollapse,
+  availableUpdate = null,
+  updateInstallState = "idle",
+  updateProgress = null,
+  onInstallUpdate,
 }: {
   view: string
   setView: (v: any) => void
@@ -1175,7 +1491,24 @@ function Sidebar({
   licenseState: LicenseState | null
   activeDownloadsCount?: number
   studioTools?: StudioToolDefinition[]
+  appVersion?: string
+  collapsed?: boolean
+  onToggleCollapse?: () => void
+  availableUpdate?: Update | null
+  updateInstallState?: "idle" | "downloading" | "installing" | "error"
+  updateProgress?: number | null
+  onInstallUpdate?: () => void
 }) {
+  const toolJobs = useToolJobs()
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const licenseMeter = useMemo(
+    () => computeLicenseProgress(licenseState, nowMs),
+    [licenseState, nowMs]
+  )
   const getToolSidebarIcon = (tool: StudioToolDefinition): SidebarIconName => {
     if (tool.icon) return tool.icon
     if (tool.id === "background") return "background"
@@ -1191,82 +1524,148 @@ function Sidebar({
     if (tool.id === "pattern") return "Pattern Studio"
     return tool.name
   }
+  const isUpdating = updateInstallState === "downloading" || updateInstallState === "installing"
+  const aioMetadataTool = studioTools.find(
+    (t) => t.id === "aio-metadata" || t.category.toLowerCase().includes("metadata")
+  )
+  const aioRouteKey = aioMetadataTool ? `tool:${aioMetadataTool.id}` : "tool:aio-metadata"
+  const isAssetCreatorActive =
+    view === "asset-creator" || (view.startsWith("tool:") && view !== aioRouteKey)
+  const isMasteringActive =
+    view === "mastering" || view === "upscaler" || view === "remove-bg" || view === "converter"
+  const isMasteringRunning =
+    toolJobs.upscaler.running || toolJobs.bgRemover.running || toolJobs.converter.running
   return (
-    <aside>
-      <Brand />
-      <div className="side-label">WORKSPACE</div>
-      <button
-        className={view === "accounts" ? "active" : ""}
-        onClick={() => setView("accounts")}
-      >
-        <SidebarIcon name="accounts" /> <span>Dashboard</span>
-      </button>
-      {studioTools.map((tool) => {
-        const routeKey = `tool:${tool.id}`
-        return (
+    <aside className={collapsed ? "is-collapsed" : ""}>
+      <div className="side-header-row">
+        <Brand
+          appVersion={appVersion}
+          collapsed={collapsed}
+          availableUpdate={availableUpdate}
+          updateInstallState={updateInstallState}
+          updateProgress={updateProgress}
+          onInstallUpdate={onInstallUpdate}
+        />
+        {onToggleCollapse && (
           <button
-            key={tool.id}
-            className={view === routeKey ? "active" : ""}
-            onClick={() => setView(routeKey)}
+            type="button"
+            className="side-collapse-btn"
+            onClick={onToggleCollapse}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            <SidebarIcon name={getToolSidebarIcon(tool)} />{" "}
-            <span>{getToolSidebarLabel(tool)}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {collapsed ? (
+                <path d="m9 18 6-6-6-6" />
+              ) : (
+                <path d="m15 18-6-6 6-6" />
+              )}
+            </svg>
           </button>
-        )
-      })}
+        )}
+      </div>
+      {collapsed && availableUpdate && onInstallUpdate && (
+        <button
+          type="button"
+          className="side-collapsed-update-btn"
+          disabled={isUpdating}
+          onClick={onInstallUpdate}
+          title={`Update available: v${availableUpdate.version} — click to install`}
+        >
+          ↑
+        </button>
+      )}
       <button
-        className={view === "tools" ? "active" : ""}
-        onClick={() => setView("tools")}
+        className={view === "accounts" || view === "flow" ? "active" : ""}
+        onClick={() => setView("accounts")}
+        title="Accounts"
       >
-        <SidebarIcon name="tools" /> <span>Studio Tools</span>
+        <SidebarIcon name="accounts" /> <span>Accounts</span>
       </button>
       <button
-        className={view === "favorites" ? "active" : ""}
-        onClick={() => setView("favorites")}
+        className={isAssetCreatorActive ? "active" : ""}
+        onClick={() => setView("asset-creator")}
+        title="Asset Creator"
       >
-        <SidebarIcon name="favorites" /> <span>Favorites</span>
+        <SidebarIcon name="sparkles" /> <span>Asset Creator</span>
       </button>
+      <button
+        className={isMasteringActive ? "active" : ""}
+        onClick={() => setView("mastering")}
+        title="Mastering"
+      >
+        <SidebarIcon name="layers" /> <span>Mastering</span>
+        {isMasteringRunning && <span className="side-job-dot" aria-label="Running" />}
+      </button>
+      {aioMetadataTool && (
+        <button
+          className={view === aioRouteKey ? "active" : ""}
+          onClick={() => setView(aioRouteKey)}
+          title={aioMetadataTool.name}
+        >
+          <SidebarIcon name={getToolSidebarIcon(aioMetadataTool)} />{" "}
+          <span>{aioMetadataTool.name}</span>
+        </button>
+      )}
       <div className="rule" />
-      <div className="side-label">GENERAL</div>
       <button
         className={view === "license" ? "active" : ""}
         onClick={() => setView("license")}
+        title="License"
       >
         <SidebarIcon name="license" /> <span>License</span>
       </button>
       <button
-        className={view === "updates" ? "active" : ""}
-        onClick={() => setView("updates")}
-      >
-        <SidebarIcon name="updates" /> <span>Updates</span>
-      </button>
-      <button
         className={view === "info" ? "active" : ""}
         onClick={() => setView("info")}
+        title="Info"
       >
         <SidebarIcon name="info" /> <span>Info</span>
       </button>
       <button
         className={view === "settings" ? "active" : ""}
         onClick={() => setView("settings")}
+        title="Settings"
       >
         <SidebarIcon name="settings" /> <span>Settings</span>
       </button>
-      <div className="side-bottom">
-        <div className="avatar">
-          {profile.avatar ? (
-            <img src={profile.avatar} alt="StockStudio Pro profile" />
-          ) : (
-            <img className="brand-avatar-fallback" src={brandLogoWhite} alt="StockStudio Pro" />
+      <div
+        className="side-bottom"
+        title={`${licenseMeter.planDisplay} · ${licenseMeter.countdownLabel} (${licenseMeter.tooltip})`}
+      >
+        <div className="side-license-row">
+          <div className="avatar">
+            {profile.avatar ? (
+              <img src={profile.avatar} alt="StockStudio Pro profile" />
+            ) : (
+              <img className="brand-avatar-fallback" src={brandLogoWhite} alt="StockStudio Pro" />
+            )}
+          </div>
+          {!collapsed && (
+            <div className="side-license-meta">
+              <div className="side-license-top">
+                <span className="side-license-plan" title={licenseMeter.planDisplay}>
+                  {licenseMeter.planDisplay}
+                </span>
+                <span
+                  className={`side-license-status ${
+                    licenseState?.is_offline_grace ? "is-offline" : ""
+                  }`}
+                >
+                  {licenseState?.is_offline_grace ? "Offline" : "Active"}
+                </span>
+              </div>
+              <div className="side-license-countdown">
+                <span>{licenseMeter.countdownLabel}</span>
+              </div>
+            </div>
           )}
         </div>
-        <div>
-          <div className="side-license-info">
-            <small>
-              <span>License {licenseState ? licenseStatusLabel(licenseState.status, licenseState.is_offline_grace) : "Unavailable"}: <b>{licenseState ? licensePlanLabel(licenseState.plan) : "—"}</b></span>
-              <span>Valid Until: <b>{licenseExpiryLabel(licenseState)}</b></span>
-            </small>
-          </div>
+        <div className="side-license-bar-track" aria-label={`License remaining ${licenseMeter.percent}%`}>
+          <div
+            className="side-license-bar-fill"
+            style={{ width: `${licenseMeter.percent}%` }}
+          />
         </div>
       </div>
     </aside>
@@ -1378,10 +1777,18 @@ function SidebarIcon({ name }: { name: SidebarIconName }) {
   }
   return <svg className="sidebar-icon" {...common}>{paths[name] || paths.sparkles}</svg>
 }
-function StudioToolsSection({
+function resolveSidebarToolIcon(tool: StudioToolDefinition): SidebarIconName {
+  if (tool.icon) return tool.icon
+  if (tool.id === "background") return "background"
+  if (tool.id === "mascot") return "mascot"
+  if (tool.id === "pattern") return "pattern"
+  if (tool.id === "aio-metadata") return "tag"
+  if (tool.badge === "GEMINI") return "sparkles"
+  return "wand"
+}
+
+function AssetCreatorGrid({
   tools,
-  syncing,
-  onSync,
   accounts,
   toolAccountMap,
   liveSessionIds,
@@ -1389,8 +1796,6 @@ function StudioToolsSection({
   onLaunch,
 }: {
   tools: StudioToolDefinition[]
-  syncing?: boolean
-  onSync?: () => void
   accounts: Account[]
   toolAccountMap: Record<string, string>
   liveSessionIds: string[]
@@ -1398,93 +1803,138 @@ function StudioToolsSection({
   onLaunch: (tool: StudioToolDefinition, accountId?: string) => void
 }) {
   return (
-    <section className="tools-section" aria-label="Studio Tools">
-      <div className="section-header">
-        <div>
-          <h2>Studio Tools</h2>
-          <p>Assign isolated Google Flow accounts per tool and run multiple sessions concurrently.</p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {onSync && (
+    <div className="grid">
+      {tools.map((tool) => {
+        const isExternal = tool.launchMode === "external-browser"
+        const needsAccount = !isExternal && accounts.length === 0
+        const assignedId =
+          (toolAccountMap[tool.id] &&
+            accounts.some((a) => a.id === toolAccountMap[tool.id]) &&
+            toolAccountMap[tool.id]) ||
+          accounts[0]?.id ||
+          ""
+        const isAssignedLive =
+          !isExternal && Boolean(assignedId) && liveSessionIds.includes(assignedId)
+        return (
+          <article className="card uniform-feature-card" key={tool.id}>
+            <div className="card-top is-end">
+              <span
+                className={`badge ${
+                  isExternal ? "badge-info" : isAssignedLive ? "" : "badge-accent"
+                }`}
+              >
+                {isExternal ? tool.badge : isAssignedLive ? "LIVE" : tool.badge}
+              </span>
+            </div>
+            <div className="avatar large feature-emblem">
+              <SidebarIcon name={resolveSidebarToolIcon(tool)} />
+            </div>
+            <h2>{tool.name}</h2>
+            <p className="feature-card-desc">{tool.description}</p>
+            {!isExternal && accounts.length > 0 && (
+              <div className="feature-card-picker">
+                <select
+                  aria-label={`Select account for ${tool.name}`}
+                  value={assignedId}
+                  onChange={(e) => onSelectToolAccount(tool.id, e.target.value)}
+                >
+                  {accounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name}
+                      {liveSessionIds.includes(acc.id) ? " (Active)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <button
               type="button"
-              className="secondary"
-              disabled={syncing}
-              onClick={onSync}
-              title="Refresh studio tool links from server"
-              style={{ padding: "5px 10px", fontSize: "12px" }}
+              className="primary wide"
+              disabled={needsAccount}
+              onClick={() => onLaunch(tool, isExternal ? undefined : assignedId)}
             >
-              {syncing ? "Syncing…" : "↻ Sync Tools"}
+              {needsAccount
+                ? "Add Account First"
+                : isExternal
+                ? "Open Browser ↗"
+                : isAssignedLive
+                ? "Resume →"
+                : "Open Tool →"}
             </button>
-          )}
-          <span className="badge badge-accent">
-            {liveSessionIds.length > 0
-              ? `${liveSessionIds.length} LIVE SESSION${liveSessionIds.length === 1 ? "" : "S"}`
-              : `${tools.length} TOOLS`}
-          </span>
-        </div>
-      </div>
-      <div className="tools-grid">
-        {tools.map((tool) => {
-          const isExternal = tool.launchMode === "external-browser"
-          const needsAccount = !isExternal && accounts.length === 0
-          const assignedId =
-            (toolAccountMap[tool.id] &&
-              accounts.some((a) => a.id === toolAccountMap[tool.id]) &&
-              toolAccountMap[tool.id]) ||
-            accounts[0]?.id ||
-            ""
-          const isAssignedLive =
-            !isExternal && Boolean(assignedId) && liveSessionIds.includes(assignedId)
-          return (
-            <article className="tool-card" key={tool.id}>
-              <div className="tool-card-top">
-                <h3>{tool.name}</h3>
-                <span className={`badge ${isExternal ? "badge-info" : isAssignedLive ? "" : "badge-accent"}`}>
-                  {isExternal ? tool.badge : isAssignedLive ? "LIVE" : tool.badge}
-                </span>
-              </div>
-              <p>{tool.description}</p>
-              {!isExternal && accounts.length > 0 && (
-                <label className="tool-account-picker">
-                  <span>Account Session</span>
-                  <select
-                    aria-label={`Select account for ${tool.name}`}
-                    value={assignedId}
-                    onChange={(e) => onSelectToolAccount(tool.id, e.target.value)}
-                  >
-                    {accounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.name}
-                        {liveSessionIds.includes(acc.id) ? " (Active)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <div className="tool-card-actions">
-                <span className="tool-account-hint">
-                  {isExternal
-                    ? "Opens in default browser"
-                    : needsAccount
-                    ? "Add an account to launch"
-                    : isAssignedLive
-                    ? "Session running in background"
-                    : "Isolated WebView2 profile"}
-                </span>
-                <button
-                  className={isExternal ? "secondary" : "primary"}
-                  disabled={needsAccount}
-                  onClick={() => onLaunch(tool, isExternal ? undefined : assignedId)}
-                >
-                  {isExternal ? "Open Browser ↗" : isAssignedLive ? "Resume →" : "Launch →"}
-                </button>
-              </div>
-            </article>
-          )
-        })}
-      </div>
-    </section>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+function MasteringGrid({
+  running,
+  onOpenTool,
+}: {
+  running: { upscaler: boolean; bgRemover: boolean; converter: boolean }
+  onOpenTool: (target: "upscaler" | "remove-bg" | "converter") => void
+}) {
+  const items: Array<{
+    id: "upscaler" | "remove-bg" | "converter"
+    name: string
+    description: string
+    icon: SidebarIconName
+    isRunning: boolean
+    cta: string
+  }> = [
+    {
+      id: "upscaler",
+      name: "Upscaler",
+      description: "Upscale images cleanly to microstock resolution (min 3000 px).",
+      icon: "maximize",
+      isRunning: running.upscaler,
+      cta: "Open Upscaler →",
+    },
+    {
+      id: "remove-bg",
+      name: "Remove BG",
+      description: "Isolate subjects with transparent PNG output and halo-free edges.",
+      icon: "scissors",
+      isRunning: running.bgRemover,
+      cta: "Open Remove BG →",
+    },
+    {
+      id: "converter",
+      name: "Vector Optimizer",
+      description: "Optimize SVG logos, mascots, and patterns to microstock EPS.",
+      icon: "layers",
+      isRunning: running.converter,
+      cta: "Open Optimizer →",
+    },
+  ]
+
+  return (
+    <div className="grid">
+      {items.map((item) => (
+        <article className="card uniform-feature-card" key={item.id}>
+          <div className="card-top is-end">
+            {item.isRunning ? (
+              <span className="badge badge-accent">RUNNING</span>
+            ) : (
+              <span className="badge badge-muted">LOCAL</span>
+            )}
+          </div>
+          <div className="avatar large feature-emblem">
+            <SidebarIcon name={item.icon} />
+          </div>
+          <h2>{item.name}</h2>
+          <p className="feature-card-desc">{item.description}</p>
+          <button
+            type="button"
+            className="primary wide"
+            onClick={() => onOpenTool(item.id)}
+          >
+            {item.isRunning ? "View Progress →" : item.cta}
+          </button>
+        </article>
+      ))}
+    </div>
   )
 }
 function LicensePage({
@@ -1804,7 +2254,6 @@ function Card({
   menuOpen,
   onMenu,
   onOpen,
-  onFavorite,
   onDelete,
   onRename,
   dragEnabled,
@@ -1816,7 +2265,6 @@ function Card({
   menuOpen: boolean
   onMenu: () => void
   onOpen: () => void
-  onFavorite: () => void
   onDelete: () => void
   onRename: () => void
   dragEnabled: boolean
@@ -1826,13 +2274,7 @@ function Card({
 }) {
   return (
     <article data-account-id={a.id} onPointerDown={onPointerDown} className={`card ${dragEnabled ? "is-draggable" : ""} ${isDragging ? "is-dragging" : ""} ${isDropTarget ? "is-drop-target" : ""}`}>
-      <div className="card-top">
-        <button
-          className={`star ${a.favorite ? "fav" : ""}`}
-          onClick={onFavorite}
-        >
-          {a.favorite ? "★" : "☆"}
-        </button>
+      <div className="card-top is-end">
         <div className="menu-wrap">
           <button className="more" onClick={onMenu}>
             •••
@@ -1840,9 +2282,6 @@ function Card({
           {menuOpen && (
             <div className="account-menu">
               <button onClick={onRename}>Rename</button>
-              <button onClick={onFavorite}>
-                {a.favorite ? "Remove from Favorites" : "Add to Favorites"}
-              </button>
               <div className="menu-rule" />
               <button className="menu-danger" onClick={onDelete}>
                 Delete Account
@@ -1874,7 +2313,7 @@ function DragPreview({ account, point, offset }: { account: Account | null; poin
   return (
     <div className="custom-drag-layer" aria-hidden="true">
       <article className="drag-preview-card" style={{ transform: `translate3d(${point.x - offset.x}px, ${point.y - offset.y}px, 0) scale(1.04) rotate(2deg)` }}>
-        <div className="card-top"><span className={`star ${account.favorite ? "fav" : ""}`}>{account.favorite ? "★" : "☆"}</span><span className="more">•••</span></div>
+        <div className="card-top is-end"><span className="more">•••</span></div>
         <div className="avatar large"><img src={account.avatarUrl || "/google-flow.png"} alt="" /></div>
         <h2>{account.name}</h2>
         <div className="primary wide">Open Google Flow <span>→</span></div>
@@ -2238,7 +2677,18 @@ function FlowShell({
             disabled={!canGoBack}
             onClick={() => void handleWebviewNav("back")}
           >
-            ←
+            <svg
+              className="flow-icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+            </svg>
           </button>
           <button
             className="flow-nav-btn"
@@ -2248,7 +2698,18 @@ function FlowShell({
             disabled={!canGoForward}
             onClick={() => void handleWebviewNav("forward")}
           >
-            →
+            <svg
+              className="flow-icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
           </button>
           <button
             className="flow-nav-btn"
@@ -2257,27 +2718,36 @@ function FlowShell({
             aria-label="Reload"
             onClick={() => void handleWebviewNav("reload")}
           >
-            ↻
-          </button>
-          <button className="flow-nav-btn flow-nav-dashboard" type="button" onClick={onBack}>
-            ‹ Dashboard
+            <svg
+              className={`flow-icon-svg ${isNavigating ? "is-spinning" : ""}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+              <path d="M16 16h5v5" />
+            </svg>
           </button>
         </div>
         <div className="flow-status-group">
-          {(studioBadgeLabel || isBackgroundStudio) && (
-            <span className="badge badge-accent">
-              {studioBadgeLabel ?? "BACKGROUND STUDIO"}
-            </span>
+          {isNavigating && (
+            <>
+              <span className="session-dot is-loading" aria-hidden="true" />
+              <span>Loading…</span>
+            </>
           )}
-          {(hasExistingToolSession || hasExistingBgSession) && sessionState === "ready" && (
-            <span className="badge">RESUMED</span>
+          {!isNavigating && sessionError && (
+            <>
+              <span className="session-dot is-error" aria-hidden="true" />
+              <span className="badge badge-warning">SESSION ERROR</span>
+            </>
           )}
-          <span
-            className={`session-dot is-${isNavigating ? "loading" : sessionState}`}
-            aria-hidden="true"
-          />
-          <span>{isNavigating ? "Loading page…" : status}</span>
-          {sessionError && <span className="badge badge-warning">SESSION ERROR</span>}
         </div>
         <div className="flow-controls">
           <div className="mini-navigator" ref={menuWrapRef}>

@@ -9,7 +9,7 @@ on:
       tag:
         description: Release tag to build
         required: true
-        default: v0.2.3
+        default: v0.2.4
       publish:
         description: Publish release immediately (required for Tauri auto-updater)
         type: boolean
@@ -168,7 +168,7 @@ jobs:
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: StockStudio Pro ${{ env.RELEASE_TAG }}
-          releaseBody: Signed StockStudio Pro ${{ env.RELEASE_TAG }} release (AIO Metadata in-app WebView, Gemini chrome cleanup, and dynamic remote Studio Tools).
+          releaseBody: Signed StockStudio Pro ${{ env.RELEASE_TAG }} release (Mastering suite with AI Upscaler, AI Remove BG, and Vector Optimizer Logo/Mascot & Pattern modes + Visual Audit, clean 4-pillar sidebar, uniform grids, persistent background jobs, and one-click auto-updater).
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
           prerelease: false
           includeUpdaterJson: true

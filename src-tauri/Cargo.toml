@@ -3,7 +3,7 @@ members = [".", "crates/stockstudio-license-core", "crates/stockstudio-nmh"]
 
 [package]
 name = "stockstudio-pro"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 
 [lib]
@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "3", features = ["windows-native"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 base64 = "0.22"
@@ -28,6 +28,12 @@ sha2 = "0.10"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 url = "2"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-24", "directml"] }
+tracedraw-core = { git = "https://github.com/tracedraw/tracedraw.git", rev = "a67ff6abc22464cbd9e934f1e3c7e71711a1a31b" }
+tracedraw-io = { git = "https://github.com/tracedraw/tracedraw.git", rev = "a67ff6abc22464cbd9e934f1e3c7e71711a1a31b" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
